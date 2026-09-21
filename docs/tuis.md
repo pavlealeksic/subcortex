@@ -109,6 +109,43 @@ release as of 2026-09-21. Every hook command has the form
   pre-compaction event. Junie hooks are an Early Access feature.
   **Write** `~/.junie/config.json` / `~/.config/devin/config.json`.
 
+### Grok Build — `grok-build`
+- **Writes its own file** `$GROK_HOME/hooks/subcortex.json` (default `~/.grok`):
+  `PostToolUse` (`Bash|bash`), `PreCompact`, `PostCompact`. Always trusted;
+  loaded when a session starts (`/hooks` → `r` reloads).
+- Trimming replies with the *complete* tagged result (Grok rejects its own doc
+  example): the received `toolResult` with `output_for_prompt` trimmed — the
+  `exit: N` header kept — and `output: []`. Verified end to end with grok 1.0.40.
+- Grok discards prompt-hook output, so no hint. The compaction snapshot comes
+  back as `additionalContext` on the next shell call (the only channel Grok offers).
+- Grok also runs `~/.claude/settings.json` hooks; the Claude Code adapter
+  recognises Grok (`GROK_HOOK_EVENT`) and stays silent.
+
+### Docker Agent — `docker-agent` (≥ 1.137)
+- **Writes its own drop-in** `~/.config/cagent/hooks.d/50-subcortex.yaml`
+  (`DOCKER_AGENT_CONFIG_DIR`/`CAGENT_CONFIG_DIR`): `user_prompt_submit`,
+  `user_steering_messages_submit`, `user_followup_submit`,
+  `tool_response_transform` (`shell`), `before_compaction`, `after_compaction`;
+  every hook `on_error: ignore`.
+- snake_case replies (`hook_specific_output`); the rewrite is what the model
+  sees *and* what's persisted. Before 1.137 a rewrite could bypass secret
+  redaction, hence the version floor.
+- The snapshot is read read-only from `~/.cagent/session.db` and delivered
+  with the next prompt.
+
+### Mistral Vibe — `vibe` (≥ 2.25.5)
+- **Writes** a marked `[[hooks]]` block in `$VIBE_HOME/hooks.toml` (default
+  `~/.vibe`; Vibe never rewrites that file): one `post_tool` hook on `bash`.
+- Trimming replies `{"decision": "deny", "reason": …}`, which in Vibe replaces
+  the model-visible text without failing the call (verified in both of its
+  harnesses) — allowed for this event only. No prompt or compaction events exist.
+
+### Letta Code — `letta`
+- **Writes** `~/.letta/settings.json` → `hooks.UserPromptSubmit` (timeout in
+  ms, `quiet: true` so the hint isn't echoed in the TUI). The hint is plain
+  text (Letta injects stdout verbatim). Restart letta after installing, and
+  don't edit hooks through `/hooks` in a session started before the install.
+
 ## Plugins
 
 ### OpenCode — `opencode` (≥ 1.1.62), Kilo Code CLI — `kilo`
@@ -134,6 +171,28 @@ release as of 2026-09-21. Every hook command has the form
 - **Writes** `mcp.subcortex` in `~/.config/crush/crush.json` (strict JSON) /
   `extensions.subcortex` in Goose's `config.yaml` (inserted line-wise between
   marker comments, validated with PyYAML when available).
+
+### Warp — `warp`, Zed — `zed`, Kiro CLI — `kiro`, Cline CLI — `cline`, Auggie — `auggie`
+- No hooks that can inject anything; subcortex registers its MCP server:
+  `~/.warp/.mcp.json` · Zed's `global_settings.json` (its `settings.json` is
+  JSONC; `global_settings.json` is merged beneath it and never written by Zed) ·
+  `~/.kiro/settings/mcp.json` (Kiro's default engine only takes hooks inside
+  agent files, and the opt-in engine injects noise on every prompt) ·
+  `~/.cline/data/settings/cline_mcp_settings.json` · `~/.augment/settings.json`.
+
+### Continue CLI (`cn`), Rovo Dev CLI — manual
+- Continue: add to the `mcpServers` list in `~/.continue/config.yaml` (don't
+  create the file — that switches `cn` away from its remote config):
+  ```yaml
+  mcpServers:
+    - name: subcortex
+      command: /path/to/subcortex
+      args: [mcp]
+  ```
+- Rovo Dev: add `"subcortex": {"command": "/path/to/subcortex", "args": ["mcp"]}`
+  under `mcpServers` in the file named by `mcp.mcpConfigPath` in
+  `~/.rovodev/config.yml` (default `~/.rovodev/mcp.json`); Rovo Dev asks you
+  to trust it on first launch.
 
 ## No seam
 

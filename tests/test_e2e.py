@@ -211,5 +211,33 @@ class TestOpenCode(E2ECase):
             self.assertIn(TRIMMED, json.dumps(requests[1]), "the tool.execute.after trim did not reach the model")
 
 
+GROK = os.environ.get("SUBCORTEX_GROK_BIN") or shutil.which("grok")
+
+
+@unittest.skipUnless(GROK, "Grok Build is not installed (or set SUBCORTEX_GROK_BIN)")
+class TestGrokBuild(E2ECase):
+    def test_tagged_replacement_reaches_the_model(self):
+        with MockLLM() as llm:
+            for sub in ("home", "grok"):
+                (self.root / sub).mkdir(exist_ok=True)
+            (self.root / "grok" / "config.toml").write_text(
+                f'[model.mock]\nmodel = "mock"\nbase_url = "{llm.url}/v1"\napi_key = "x"\n'
+                'api_backend = "chat_completions"\ncontext_window = 200000\n[models]\ndefault = "mock"\n')
+            env = dict(os.environ, **self.subcortex_env, HOME=str(self.root / "home"),
+                       GROK_HOME=str(self.root / "grok"), GROK_DISABLE_AUTOUPDATER="1", XAI_API_KEY="dummy",
+                       PWD=str(self.root / "work"))
+            self.install("grok-build", env)
+            # Under Grok's own 20k-char cut, so the trim is subcortex's.
+            llm.script = [{"tool": "run_terminal_command",
+                           "input": {"command": "yes 'compiling module ok' | head -900", "description": "build"}},
+                          {"text": "Done."}]
+            proc = self.run_tui([GROK, "-p", "run the build", "-m", "mock", "--yolo", "--no-auto-update",
+                                 "--output-format", "json", "--cwd", str(self.root / "work")], env, timeout=180)
+            self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+            after_tool = json.dumps(llm.agent_requests()[1:])
+            self.assertIn(TRIMMED, after_tool)
+            self.assertIn("exit: 0", after_tool)
+
+
 if __name__ == "__main__":
     unittest.main()

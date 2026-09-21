@@ -100,7 +100,9 @@ def run(tui: str, event_name: Optional[str], raw: str,
     elif kind == TOOL_OUTPUT:
         replacement = policy.trim_output(
             event.output, cfg, client.judge, event.tool, event.tool_input, event.failed)
-        response = adapter.render_tool_output(event, replacement) if replacement else None
+        # An adapter may also deliver context here (event.extra["context"]).
+        if replacement or event.extra.get("context"):
+            response = adapter.render_tool_output(event, replacement)
     elif kind == PRE_COMPACT:
         if event.messages is not None:
             policy.save_snapshot(event.session_id, event.messages, cfg, event.trigger)

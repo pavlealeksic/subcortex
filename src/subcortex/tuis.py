@@ -30,6 +30,14 @@ ALIASES: Dict[str, str] = {
     "openinterpreter": "open-interpreter",
     "kilocode": "kilo",
     "kilo-code": "kilo",
+    "grok": "grok-build",
+    "cagent": "docker-agent",
+    "docker": "docker-agent",
+    "letta-code": "letta",
+    "mistral-vibe": "vibe",
+    "augment": "auggie",
+    "kiro-cli": "kiro",
+    "cline-cli": "cline",
 }
 
 

@@ -71,7 +71,7 @@ class ClaudeCodeAdapter(ClaudeStyleAdapter):
 
 
 # Set in hook processes by other TUIs that also execute ~/.claude/settings.json hooks.
-FOREIGN_HOST_ENV = ("CURSOR_VERSION", "DROID_PROJECT_DIR", "FACTORY_PROJECT_DIR")
+FOREIGN_HOST_ENV = ("CURSOR_VERSION", "DROID_PROJECT_DIR", "FACTORY_PROJECT_DIR", "GROK_HOOK_EVENT")
 
 
 def is_claude_code_payload(payload: Dict[str, Any]) -> bool:

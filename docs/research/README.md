@@ -12,6 +12,8 @@ Caveats:
   was addressed in 0.2.0.
 - TUIs move fast. Before changing an adapter, re-check the linked sources;
   don't treat these notes as current.
+- Wave 2 (`kiro.md`, `grok-build.md`, `docker-agent.md`, `letta.md`,
+  `vibe.md`, `mcp-only.md`) covers the agents first found by the sweep.
 - `sweep.md` surveys every other terminal agent found (Kiro, Grok Build,
   Docker Agent, Pi, Cline, Letta, Mistral Vibe, Warp, Zed, …) and ranks them
   as integration candidates.

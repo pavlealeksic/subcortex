@@ -25,6 +25,10 @@ _INSTALLERS: Dict[str, str] = {
     "copilot": "copilot:CopilotInstaller",
     "kimi-code": "kimi_code:KimiCodeInstaller",
     "openhands": "openhands:OpenHandsInstaller",
+    "grok-build": "more_hooks:GrokBuildInstaller",
+    "docker-agent": "more_hooks:DockerAgentInstaller",
+    "letta": "more_hooks:LettaInstaller",
+    "vibe": "more_hooks:VibeInstaller",
     # plugins
     "opencode": "opencode:OpenCodeInstaller",
     "kilo": "opencode:KiloInstaller",
@@ -32,6 +36,11 @@ _INSTALLERS: Dict[str, str] = {
     # MCP only
     "crush": "crush:CrushInstaller",
     "goose": "goose:GooseInstaller",
+    "warp": "mcp_only:WarpInstaller",
+    "zed": "mcp_only:ZedInstaller",
+    "auggie": "mcp_only:AuggieInstaller",
+    "cline": "mcp_only:ClineInstaller",
+    "kiro": "mcp_only:KiroInstaller",
 }
 
 

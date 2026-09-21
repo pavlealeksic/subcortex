@@ -24,6 +24,10 @@ _ADAPTERS: Dict[str, str] = {
     "copilot": "copilot:CopilotAdapter",
     "kimi-code": "kimi_code:KimiCodeAdapter",
     "openhands": "openhands:OpenHandsAdapter",
+    "grok-build": "grok:GrokBuildAdapter",
+    "docker-agent": "docker_agent:DockerAgentAdapter",
+    "letta": "letta_vibe:LettaAdapter",
+    "vibe": "letta_vibe:VibeAdapter",
 }
 
 

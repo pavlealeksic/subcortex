@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List
 
-from .base import InstallError, Installer, Target, mcp_json_target
+from .base import Installer, Target, mcp_json_target, owned_file_target
 
 EVENTS = {"userPromptSubmitted": (None, 5), "postToolUse": ("bash|powershell", 10), "preCompact": (None, 10)}
 SESSION = "8c5d7b2e-3f41-4d0a-9c6b-1e2f3a4b5c6d"
@@ -43,18 +43,7 @@ class CopilotInstaller(Installer):
         return json.dumps({"version": 1, "hooks": hooks}, indent=2) + "\n"
 
     def targets(self) -> List[Target]:
-        path = copilot_home() / "hooks" / "subcortex.json"
-        content = self._content()
-
-        def ours(text: str) -> bool:
-            return "subcortex-hook" in text or "subcortex.hook" in text
-
-        def merge(text: str) -> str:
-            if text.strip() and not ours(text):
-                raise InstallError(f"{path} exists and was not written by subcortex; refusing to overwrite it")
-            return content
-
-        targets = [Target(path, merge, lambda t: "" if ours(t) else t, ours)]
+        targets = [owned_file_target(copilot_home() / "hooks" / "subcortex.json", self._content())]
         if self.mcp:
             targets.append(mcp_json_target(copilot_home() / "mcp-config.json", self.mcp_command(),
                                            extra={"type": "local", "env": {}, "tools": ["*"]}))

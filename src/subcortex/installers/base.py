@@ -547,6 +547,21 @@ def daemon_url() -> str:
     return f"http://127.0.0.1:{int(load_config()['port'])}"
 
 
+def owned_file_target(dest: Path, content: str) -> Target:
+    """A config file subcortex generates and owns entirely (hooks drop-ins).
+    A same-named file that doesn't reference subcortex is never overwritten."""
+
+    def ours(text: str) -> bool:
+        return any(marker in text for marker in ("subcortex-hook", "subcortex.hook", '"_subcortex"'))
+
+    def merge(text: str) -> str:
+        if text.strip() and not ours(text):
+            raise InstallError(f"{dest} exists and was not written by subcortex; refusing to overwrite it")
+        return content
+
+    return Target(dest, merge, lambda t: "" if ours(t) else t, ours)
+
+
 def plugin_file_target(dest: Path, content: str) -> Target:
     """A plugin file we own outright. A same-named file without our marker is
     someone else's and is never overwritten or deleted."""

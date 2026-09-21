@@ -23,8 +23,8 @@ FOREIGN_HOOK = {"type": "command", "command": "rtk hook claude"}
 
 def foreign_content(path: Path) -> str:
     """Pre-existing user content for a target file (in the installers' own format)."""
-    if path.stem == "subcortex":
-        return ""  # files subcortex owns outright (plugins, copilot hooks file)
+    if "subcortex" in path.stem:
+        return ""  # files subcortex owns outright (plugins, hook drop-ins)
     if path.suffix == ".json":
         if path.name == "hooks.json" and ".cursor" in path.parts:
             data = {"version": 1, "hooks": {"stop": [{"command": "echo mine"}]}}

@@ -335,6 +335,92 @@ class TestOpenHands(AdapterCase):
         self.assertIsNone(adapter.guard("prompt", {"continue": True, "additionalContext": "x"}))
 
 
+class TestWaveTwo(AdapterCase):
+    def test_grok_replaces_with_the_full_tagged_object(self):
+        payload = self.sample("grok-build", "PostToolUse")
+        payload["toolResult"]["output_for_prompt"] = "exit: 0\n" + BIG
+        out = self.run_hook("grok-build", "PostToolUse", payload)
+        updated = out["hookSpecificOutput"]["updatedToolOutput"]
+        self.assertEqual(updated["type"], "Bash")
+        self.assertEqual(updated["output"], [])
+        self.assertTrue(updated["output_for_prompt"].startswith("exit: 0\n"))
+        self.assertIn("[subcortex: truncated", updated["output_for_prompt"])
+        for key in ("exit_code", "command", "truncated", "timed_out", "current_dir", "output_file", "total_bytes"):
+            self.assertIn(key, updated)
+        self.assertEqual(set(out), {"hookSpecificOutput"})
+
+    def test_grok_leaves_failed_truncated_and_background_results_alone(self):
+        for change in ({"toolResultTruncated": True}, {"toolResult": {"type": "BackgroundTaskStarted"}}):
+            payload = dict(self.sample("grok-build", "PostToolUse"), **change)
+            self.assertIsNone(self.run_hook("grok-build", "PostToolUse", payload), change)
+        payload = self.sample("grok-build", "PostToolUse")
+        payload["toolResult"]["exit_code"] = 1
+        self.assertIsNone(self.run_hook("grok-build", "PostToolUse", payload))
+
+    def test_grok_restores_after_compaction_on_the_next_shell_call(self):
+        self.run_hook("grok-build", "PreCompact", self.sample("grok-build", "PreCompact"))
+        self.run_hook("grok-build", "PostCompact", self.sample("grok-build", "PostCompact"))
+        payload = self.sample("grok-build", "PostToolUse")
+        payload["toolResult"]["output_for_prompt"] = "exit: 0\nsmall output"
+        out = self.run_hook("grok-build", "PostToolUse", payload)
+        self.assertIn("rename getUser", out["hookSpecificOutput"]["additionalContext"])
+        self.assertNotIn("updatedToolOutput", out["hookSpecificOutput"])
+
+    def test_claude_adapter_is_silent_under_grok(self):
+        with mock.patch.dict(os.environ, {"GROK_HOOK_EVENT": "user_prompt_submit"}):
+            self.assertIsNone(self.run_hook("claude-code", "UserPromptSubmit",
+                                            self.sample("claude-code", "UserPromptSubmit")))
+
+    def test_docker_agent_snake_case_responses(self):
+        for event in ("user_prompt_submit", "user_steering_messages_submit", "user_followup_submit"):
+            out = self.run_hook("docker-agent", event, self.sample("docker-agent", event))
+            self.assertEqual(set(out["hook_specific_output"]), {"additional_context"}, event)
+        out = self.run_hook("docker-agent", "tool_response_transform",
+                            self.sample("docker-agent", "tool_response_transform"))
+        self.assertIn("[subcortex: truncated", out["hook_specific_output"]["updated_tool_response"])
+        failed = dict(self.sample("docker-agent", "tool_response_transform"), tool_error=True)
+        self.assertIsNone(self.run_hook("docker-agent", "tool_response_transform", failed))
+
+    def test_docker_agent_snapshot_from_the_session_db(self):
+        import sqlite3
+
+        db = Path(self.tmp.name, "home", ".cagent", "session.db")
+        db.parent.mkdir(parents=True)
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE session_items (session_id TEXT, item_type TEXT, position INT, message_json TEXT)")
+        session = self.sample("docker-agent", "before_compaction")["session_id"]
+        for i, (role, text) in enumerate([("user", "deploy the api"), ("assistant", "Deployed."),
+                                          ("tool", "ignored tool output")]):
+            conn.execute("INSERT INTO session_items VALUES (?, 'message', ?, ?)",
+                         (session, i, json.dumps({"role": role, "content": text})))
+        conn.commit()
+        conn.close()
+        with mock.patch.dict(os.environ, {"HOME": str(Path(self.tmp.name, "home"))}):
+            self.run_hook("docker-agent", "before_compaction", self.sample("docker-agent", "before_compaction"))
+            self.run_hook("docker-agent", "after_compaction", self.sample("docker-agent", "after_compaction"))
+            out = self.run_hook("docker-agent", "user_prompt_submit", self.sample("docker-agent", "user_prompt_submit"),
+                                FakeClient(simple=False))
+        context = out["hook_specific_output"]["additional_context"]
+        self.assertIn("user: deploy the api", context)
+        self.assertNotIn("ignored tool output", context)
+
+    def test_letta_plain_text_and_slash_commands(self):
+        out = hook.run("letta", "UserPromptSubmit", json.dumps(self.sample("letta", "UserPromptSubmit")),
+                       self.cfg, FakeClient())
+        self.assertTrue(out.startswith("[subcortex]"))
+        payload = dict(self.sample("letta", "UserPromptSubmit"), is_command=True)
+        self.assertIsNone(hook.run("letta", "UserPromptSubmit", json.dumps(payload), self.cfg, FakeClient()))
+
+    def test_vibe_deny_reason_replaces_only_successful_output(self):
+        out = self.run_hook("vibe", "post_tool", self.sample("vibe", "post_tool"))
+        self.assertEqual(out["decision"], "deny")
+        self.assertIn("[subcortex: truncated", out["reason"])
+        failed = dict(self.sample("vibe", "post_tool"), tool_status="failure")
+        self.assertIsNone(self.run_hook("vibe", "post_tool", failed))
+        adapter = adapters.get_adapter("vibe")
+        self.assertIsNone(adapter.guard("prompt", {"decision": "deny"}))  # only on tool output
+
+
 class TestPolicySwitches(AdapterCase):
     def test_disabled_features_silence_every_adapter(self):
         self.cfg["features"] = {"prompt_hint": False, "trim_output": False, "compaction_snapshot": False}

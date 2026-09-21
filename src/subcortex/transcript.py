@@ -60,8 +60,9 @@ def message_from_entry(entry: Any) -> Optional[Dict[str, str]]:
     user/assistant message with text."""
     if not isinstance(entry, dict):
         return None
-    if entry.get("isMeta") or entry.get("isCompactSummary") or entry.get("isSidechain"):
-        return None  # Claude Code reminders, compaction summaries, subagent turns
+    if entry.get("isMeta") or entry.get("isCompactSummary") or entry.get("isSidechain") \
+            or entry.get("synthetic_reason"):
+        return None  # reminders, compaction summaries, subagent turns, injected items
     payload = entry.get("payload")
     if isinstance(payload, dict):
         return message_from_entry(payload)

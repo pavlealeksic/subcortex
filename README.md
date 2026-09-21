@@ -3,8 +3,8 @@
 A local decision layer for coding-agent TUIs. A small daemon keeps a
 typed-decision model warm and answers System-1 questions — *is this prompt
 simple? is this tool output disposable?* — in milliseconds, so the big model
-doesn't spend tokens on them. Hooks and plugins wire it into 19 terminal
-agents.
+doesn't spend tokens on them. Hooks, plugins and MCP wire it into 28 terminal
+coding agents.
 
 Two decision backends:
 
@@ -41,13 +41,16 @@ Each TUI gets whichever of these its extension seam can safely support:
 | Cursor CLI | hooks | ✅ interactive | — Shell can't be replaced | ✅ restored with next prompt |
 | Kimi Code CLI ≥ 0.33 | hooks | ✅ | — output hook ignored | ✅ restored with next prompt |
 | OpenHands CLI ≥ 1.12 | hooks | ✅ | — truncates natively | ✅ via its event log |
+| Grok Build | hooks | — output discarded | ✅ tagged `updatedToolOutput` | ✅ restored on next shell call |
+| Docker Agent ≥ 1.137 | hooks | ✅ | ✅ `updated_tool_response` | ✅ restored with next prompt |
+| Mistral Vibe ≥ 2.25.5 | hooks | — no event | ✅ `post_tool` reason | — no event |
+| Letta Code | hooks | ✅ | — | — |
 | Junie CLI (EAP) | hooks | ✅ | — | — |
 | Devin CLI | hooks | ✅ | — | — |
 | OpenCode ≥ 1.1.62 | plugin | ✅ | ✅ bash only | ✅ into the compaction prompt |
 | Kilo Code CLI | plugin | ✅ | ✅ | ✅ |
 | Amp | plugin | ✅ | ✅ | ✅ rolling snapshot |
-| Crush | MCP | on-demand tools | — truncates natively | — |
-| Goose | MCP | on-demand tools | — truncates natively | — |
+| Crush, Goose, Warp, Zed, Kiro, Cline, Auggie | MCP | on-demand tools | — | — |
 | Aider | none | — | `subcortex wrap` for test/lint | — |
 
 "—" means the TUI has no seam that can do it without blocking or failing a
