@@ -67,6 +67,25 @@ class InstallerCase(unittest.TestCase):
         return installer.install(run_self_test=False, check_version=False, **kw)
 
 
+class TestConcurrentEdits(InstallerCase):
+    def test_a_change_the_tui_makes_during_install_is_kept(self):
+        installer = installers.get_installer("claude-code")
+        settings = self.home / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps({"model": "sonnet"}))
+
+        def tui_writes_meanwhile():  # e.g. /model and a permission rule, mid-install
+            settings.write_text(json.dumps({"model": "opus", "permissions": {"allow": ["Bash(ls)"]}}))
+            return []
+        with mock.patch.object(installer, "self_test", tui_writes_meanwhile):
+            result = installer.install(run_self_test=True, check_version=False)
+        self.assertTrue(result.ok, result.messages)
+        data = json.loads(settings.read_text())
+        self.assertEqual(data["model"], "opus")
+        self.assertEqual(data["permissions"], {"allow": ["Bash(ls)"]})
+        self.assertIn("UserPromptSubmit", data["hooks"])
+
+
 class TestRoundTrips(InstallerCase):
     def test_every_installer_round_trips_and_preserves_foreign_content(self):
         for name in installers.names():

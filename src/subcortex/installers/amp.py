@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from typing import List
 
-from .base import Installer, Target, bundled_plugin, daemon_url, mcp_json_target, plugin_file_target
+from .base import Installer, Target, rendered_plugin, mcp_json_target, plugin_file_target
 
 
 def amp_config_dir() -> Path:
@@ -31,7 +31,7 @@ class AmpInstaller(Installer):
                     "for `amp -x` runs pass --plugin-ready-timeout")
 
     def targets(self) -> List[Target]:
-        content = bundled_plugin("amp", "subcortex.ts").replace("__SUBCORTEX_URL__", daemon_url())
+        content = rendered_plugin("amp")
         targets = [plugin_file_target(amp_config_dir() / "plugins" / "subcortex.ts", content)]
         if self.mcp:
             targets.append(mcp_json_target(amp_config_dir() / "settings.json", self.mcp_command(),

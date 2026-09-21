@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List
 
-from .base import Installer, Target, bundled_plugin, daemon_url, json_target, plugin_file_target
+from .base import Installer, Target, rendered_plugin, json_target, plugin_file_target
 
 
 def _config_home() -> Path:
@@ -34,7 +34,7 @@ class OpenCodeInstaller(Installer):
         return _config_home().joinpath(*self.plugin_dir) / "subcortex.ts"
 
     def targets(self) -> List[Target]:
-        content = bundled_plugin("opencode", "subcortex.ts").replace("__SUBCORTEX_URL__", daemon_url())
+        content = rendered_plugin("opencode")
         targets = [plugin_file_target(self.plugin_path(), content)]
         if self.mcp:
             argv = self.mcp_command()

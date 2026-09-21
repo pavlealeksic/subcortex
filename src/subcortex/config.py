@@ -189,6 +189,8 @@ def _atomic_write(path: Path, text: str, mode: int = 0o644) -> None:
     defaults (re-enabling what the user switched off), so replace it whole."""
     import tempfile  # only writers pay for it; hooks only read
 
+    if path.is_symlink():  # dotfiles: change the file, keep the link
+        path = Path(os.path.realpath(path))
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         os.fchmod(fd, mode)

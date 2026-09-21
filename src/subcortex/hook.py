@@ -83,6 +83,16 @@ def run(tui: str, event_name: Optional[str], raw: str,
     # Consumed state (restored snapshots) is committed only after delivery.
     event.commits = commits
 
+    def on_delivery(kind_: str, **fields: Any) -> None:
+        """Count it in the ledger (``subcortex stats``) once the response is out."""
+        from . import ledger
+
+        action = lambda: ledger.record(kind_, adapter.name, **fields)  # noqa: E731
+        if commits is None:
+            action()
+        else:
+            commits.append(action)
+
     cfg = cfg or load_config()
     if client is None:
         from .client import DaemonClient
@@ -100,9 +110,14 @@ def run(tui: str, event_name: Optional[str], raw: str,
         # The slow part (a daemon round trip) first, the restore last: context is
         # claimed only when there is budget left to deliver it.
         hint = policy.prompt_hint(event.prompt, cfg, client.classify) if adapter.delivers_hints else None
-        parts = [adapter.prompt_context(event, cfg), hint]
-        text = "\n\n".join(p for p in parts if p)
+        restored = adapter.prompt_context(event, cfg)
+        text = "\n\n".join(p for p in (restored, hint) if p)
         response = adapter.render_prompt(event, text) if text else None
+        if response is not None:
+            if hint:
+                on_delivery("hint")
+            if restored:
+                on_delivery("restore")
     elif kind == TOOL_OUTPUT:
         replacement = policy.trim_output(
             event.output, cfg, client.judge, event.tool, event.tool_input, event.failed,
@@ -113,6 +128,10 @@ def run(tui: str, event_name: Optional[str], raw: str,
             event.extra["context"] = context
         if replacement or event.extra.get("context"):
             response = adapter.render_tool_output(event, replacement)
+            if response is not None and replacement:
+                on_delivery("trim", before=len(event.output or ""), after=len(replacement))
+            if response is not None and context:
+                on_delivery("restore")
     elif kind == PRE_COMPACT:
         if event.messages is not None:
             policy.save_snapshot(event.session_id, event.messages, cfg, event.trigger, tui=adapter.name)
@@ -128,6 +147,8 @@ def run(tui: str, event_name: Optional[str], raw: str,
     elif kind == SESSION_START and adapter.is_after_compaction(event):
         context = policy.restore_snapshot(event.session_id, cfg, tui=adapter.name, commits=commits)
         response = adapter.render_session_start(event, context) if context else None
+        if response is not None:
+            on_delivery("restore")
 
     response = adapter.guard(kind, response)
     if response is None:

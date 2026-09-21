@@ -47,7 +47,27 @@ const DAEMON = (() => {
   }
 })()
 const MAX_RESPONSE_BYTES = 8_000_000
+const TEMPLATED_TOKEN_FILE = "__SUBCORTEX_TOKEN_FILE__" // replaced by the installer
 let net: any = undefined // undefined: not loaded yet; null: unavailable, use fetch
+let token: string | undefined // the daemon's per-user token (a 0600 file in its data dir)
+
+async function daemonToken(): Promise<string> {
+  if (token !== undefined) return token
+  try {
+    const fs = await import("node:fs")
+    const dir = process.env.SUBCORTEX_DATA_DIR
+    const file = dir
+      ? dir.replace(/\/+$/, "") + "/token"
+      : TEMPLATED_TOKEN_FILE.startsWith("/")
+        ? TEMPLATED_TOKEN_FILE
+        : (process.env.HOME ?? "") + "/.local/share/subcortex/token"
+    token = String(fs.readFileSync(file, "utf8")).trim()
+  } catch {
+    token = ""
+  }
+  if (!/^[0-9a-f]*$/.test(token)) token = ""
+  return token
+}
 
 async function post(path: string, body: unknown, ms: number, outer?: AbortSignal): Promise<any> {
   try {
@@ -60,13 +80,16 @@ async function post(path: string, body: unknown, ms: number, outer?: AbortSignal
       }
     }
     const payload = JSON.stringify({ tui: PLUGIN_TUI, ...(body as object) })
-    return net ? await viaSocket(path, payload, ms, outer) : await viaFetch(path, payload, ms, outer)
+    const secret = await daemonToken()
+    const reply = net ? await viaSocket(path, payload, secret, ms, outer) : await viaFetch(path, payload, secret, ms, outer)
+    if (reply === null) token = undefined // re-read next time: the daemon may have made a new one
+    return reply
   } catch {
     return null
   }
 }
 
-function viaSocket(path: string, payload: string, ms: number, outer?: AbortSignal): Promise<any> {
+function viaSocket(path: string, payload: string, secret: string, ms: number, outer?: AbortSignal): Promise<any> {
   return new Promise((resolve) => {
     const chunks: any[] = []
     let size = 0
@@ -90,7 +113,7 @@ function viaSocket(path: string, payload: string, ms: number, outer?: AbortSigna
       sock = net.connect({ host: DAEMON.host, port: DAEMON.port })
       sock.on("connect", () => {
         sock.write(`POST ${path} HTTP/1.0\r\nHost: ${DAEMON.host}\r\nContent-Type: application/json\r\n` +
-          `Content-Length: ${bytes.length}\r\n\r\n`)
+          `Content-Length: ${bytes.length}\r\nX-Subcortex-Token: ${secret}\r\nX-Subcortex-Timeout-Ms: ${ms}\r\n\r\n`)
         sock.write(bytes)
       })
       sock.on("data", (chunk: any) => {
@@ -106,7 +129,7 @@ function viaSocket(path: string, payload: string, ms: number, outer?: AbortSigna
   })
 }
 
-async function viaFetch(path: string, payload: string, ms: number, outer?: AbortSignal): Promise<any> {
+async function viaFetch(path: string, payload: string, secret: string, ms: number, outer?: AbortSignal): Promise<any> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), ms)
   const abort = () => controller.abort()
@@ -114,7 +137,7 @@ async function viaFetch(path: string, payload: string, ms: number, outer?: Abort
   try {
     const res = await fetch(BASE + path, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-subcortex-token": secret, "x-subcortex-timeout-ms": String(ms) },
       body: payload,
       signal: controller.signal,
     })
@@ -156,7 +179,11 @@ export default function (amp: PluginAPI) {
       const head = await ctx.thread.messages({ from: "start", limit: 1 })
       const id = head && head[0] ? String(head[0].id) : ""
       const prev = firstSeen.get(threadID)
-      if (id) firstSeen.set(threadID, id)
+      if (id) {
+        firstSeen.delete(threadID) // re-insert: Map order is least recently used first
+        firstSeen.set(threadID, id)
+        if (firstSeen.size > 256) firstSeen.delete(firstSeen.keys().next().value as string)
+      }
       return prev !== undefined && id !== "" && id !== prev
     } catch {
       return false

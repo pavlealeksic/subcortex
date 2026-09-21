@@ -25,12 +25,19 @@ def request(port: int, method: str, path: str, payload: Optional[Dict[str, Any]]
             timeout: float = 3.0) -> Tuple[int, Any]:
     """``(status, parsed JSON body)``. Raises OSError (incl. ConnectionRefusedError,
     TimeoutError) or ValueError; the whole exchange is bounded by ``timeout``."""
+    from .auth import HEADER, read_token
+
     body = b"" if payload is None else json.dumps(payload).encode("utf-8")
     head = (f"{method} {path} HTTP/1.0\r\nHost: 127.0.0.1:{int(port)}\r\n"
-            f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n")
+            f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n"
+            f"{HEADER}: {read_token()}\r\nX-Subcortex-Timeout-Ms: {int(timeout * 1000)}\r\n\r\n")
     deadline = time.monotonic() + timeout
     chunks, size = [], 0
-    with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout) as sock:
+    # One deadline for the whole exchange: connect, send and every read share it.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        sock.connect(("127.0.0.1", int(port)))
+        sock.settimeout(max(0.01, deadline - time.monotonic()))
         sock.sendall(head.encode("ascii") + body)
         while True:
             remaining = deadline - time.monotonic()

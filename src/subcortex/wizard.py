@@ -219,6 +219,10 @@ class Wizard:
     def setup_jev(self) -> None:
         ui = self.ui
         jev = load_config()["jev"]
+        ui.dim("Sent to the Jev API per decision: your latest request, the tool call, and a "
+               "~1.5 KB head+tail excerpt of large outputs, with anything that looks like a "
+               "secret masked. Billed per input token ($0.042 per million); `subcortex stats` "
+               "shows the running total.")
         if not self.yes and self.ui.confirm(f"Use the default endpoint ({jev['base_url']}{jev['endpoint_path']})?", True) is False:
             from .backends import jev as jev_backend
 

@@ -376,6 +376,9 @@ def _record_usage(result: Dict[str, Any]) -> None:
         if isinstance(cost, bool) or not isinstance(cost, (int, float)) or not math.isfinite(cost) or cost < 0:
             cost = tokens * PRICE_PER_INPUT_TOKEN
         METRICS.add("jev_cost_usd", float(cost))
+        from .. import ledger
+
+        ledger.record("jev", tokens=tokens, usd=round(float(cost), 9))
     if isinstance(result.get("model"), str):
         METRICS.note("jev_model", result["model"][:64])
 

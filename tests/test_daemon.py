@@ -1,11 +1,18 @@
 import copy
 import json
+import os
+import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
+from pathlib import Path
+from unittest import mock
 
 import pathsetup  # noqa: F401
+
+from subcortex import __version__, auth
 
 from subcortex import daemon
 from subcortex.config import DEFAULT_CONFIG
@@ -32,10 +39,10 @@ class ExplodingBackend:
 class DaemonFixture:
     """In-thread daemon on an ephemeral port with a stubbed backend factory."""
 
-    def __init__(self, backend):
+    def __init__(self, backend, factory=None):
         cfg = copy.deepcopy(DEFAULT_CONFIG)
         self.server = daemon.create_server(
-            0, config=cfg, backend_factory=lambda config, name=None: backend)
+            0, config=cfg, backend_factory=factory or (lambda config, name=None: backend))
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -50,15 +57,18 @@ class DaemonFixture:
         self.thread.join(timeout=5)
 
 
+def _headers(**extra):
+    return {"Content-Type": "application/json", auth.HEADER: auth.read_token(), **extra}
+
+
 def get(url):
-    with urllib.request.urlopen(url, timeout=5) as resp:
+    with urllib.request.urlopen(urllib.request.Request(url, headers=_headers()), timeout=5) as resp:
         return json.loads(resp.read().decode())
 
 
 def post(url, payload):
     req = urllib.request.Request(
-        url, data=json.dumps(payload).encode(), method="POST",
-        headers={"Content-Type": "application/json"})
+        url, data=json.dumps(payload).encode(), method="POST", headers=_headers())
     with urllib.request.urlopen(req, timeout=5) as resp:
         return json.loads(resp.read().decode())
 
@@ -192,10 +202,113 @@ class TestPolicyEndpoints(unittest.TestCase):
 
     def test_bad_bodies(self):
         req = urllib.request.Request(self.d.url + "/v1/prompt-hint", data=b"not json", method="POST",
-                                     headers={"Content-Type": "application/json"})
+                                     headers=_headers())
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             urllib.request.urlopen(req, timeout=5)
         self.assertEqual(ctx.exception.code, 400)
+
+
+class TestRequestGuards(unittest.TestCase):
+    """Only this user's local processes may use the daemon: not web pages, not other users."""
+
+    def setUp(self):
+        self.d = DaemonFixture(FakeBackend())
+
+    def tearDown(self):
+        self.d.stop()
+
+    def status(self, path="/v1/restore", body=b'{"session_id": "s"}', **headers):
+        req = urllib.request.Request(self.d.url + path, data=body, method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status
+        except urllib.error.HTTPError as exc:
+            return exc.code
+
+    def test_token_is_required(self):
+        self.assertEqual(self.status(**{"Content-Type": "application/json"}), 401)
+        self.assertEqual(self.status(**{"Content-Type": "application/json", auth.HEADER: "0" * 64}), 401)
+        self.assertEqual(self.status(**_headers()), 200)
+
+    def test_browser_shaped_requests_are_refused(self):
+        # A simple cross-origin POST (text/plain, with Origin) and DNS rebinding (foreign Host).
+        self.assertEqual(self.status(**_headers(Origin="https://evil.example")), 403)
+        self.assertEqual(self.status(**_headers(Host="evil.example:7707")), 403)
+        self.assertEqual(self.status(**{**_headers(), "Content-Type": "text/plain"}), 400)
+
+    def test_health_needs_no_token_but_stats_do(self):
+        with urllib.request.urlopen(self.d.url + "/health", timeout=5) as resp:
+            self.assertEqual(json.loads(resp.read())["version"], __version__)
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(self.d.url + "/stats", timeout=5)
+        self.assertEqual(ctx.exception.code, 401)
+
+    def test_hook_routes_ignore_a_per_request_backend(self):
+        seen = []
+        fx = DaemonFixture(FakeBackend(), factory=lambda cfg, name=None: seen.append(name) or FakeBackend())
+        try:
+            post(fx.url + "/verdict/prompt", {"prompt": "hi", "backend": "jev"})
+            post(fx.url + "/v1/prompt-hint", {"prompt": "hi", "backend": "jev"})
+        finally:
+            fx.stop()
+        self.assertNotIn("jev", seen)
+
+
+class TestLoadShedding(unittest.TestCase):
+    def test_requests_that_cannot_start_in_time_get_503_quickly(self):
+        release = threading.Event()
+
+        class Slow(FakeBackend):
+            def predict(self, state, questions):
+                release.wait(10)
+                return super().predict(state, questions)
+        fx = DaemonFixture(Slow())
+        results = []
+
+        def call(timeout_ms):
+            req = urllib.request.Request(fx.url + "/verdict/prompt", data=b'{"prompt": "x"}', method="POST",
+                                         headers=_headers(**{"X-Subcortex-Timeout-Ms": str(timeout_ms)}))
+            started = time.monotonic()
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    results.append((resp.status, time.monotonic() - started))
+            except urllib.error.HTTPError as exc:
+                results.append((exc.code, time.monotonic() - started))
+        try:
+            busy = [threading.Thread(target=call, args=(10000,)) for _ in range(daemon.MAX_CONCURRENT_DECISIONS)]
+            for t in busy:
+                t.start()
+            time.sleep(0.3)
+            call(500)  # every slot is taken: refused within its own budget
+            release.set()
+            for t in busy:
+                t.join()
+        finally:
+            fx.stop()
+        code, elapsed = results[0]
+        self.assertEqual(code, 503)
+        self.assertLess(elapsed, 1.5)
+        self.assertEqual(sorted(r[0] for r in results[1:]), [200] * daemon.MAX_CONCURRENT_DECISIONS)
+
+
+class TestConfigReload(unittest.TestCase):
+    def test_an_opt_out_applies_without_a_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp, "config.json")
+            config.write_text("{}")
+            with mock.patch.dict(os.environ, {"SUBCORTEX_CONFIG": str(config)}):
+                server = daemon.create_server(0, None, backend_factory=lambda c, name=None: FakeBackend())
+                threading.Thread(target=server.serve_forever, daemon=True).start()
+                url = f"http://127.0.0.1:{server.server_address[1]}"
+                try:
+                    self.assertIsNotNone(post(url + "/v1/prompt-hint", {"prompt": "what is 2+2?"})["hint"])
+                    config.write_text(json.dumps({"features": {"prompt_hint": False}}))
+                    os.utime(config, (time.time() + 5, time.time() + 5))
+                    time.sleep(1.1)
+                    self.assertIsNone(post(url + "/v1/prompt-hint", {"prompt": "what is 2+2?"})["hint"])
+                finally:
+                    server.shutdown()
+                    server.server_close()
 
 
 if __name__ == "__main__":

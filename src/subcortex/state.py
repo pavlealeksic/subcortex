@@ -45,15 +45,19 @@ def key(tui: Any, session_id: Any) -> Optional[str]:
 
 
 def _private(directory: Path) -> Path:
-    """Create ``directory`` (and the data dir) owner-only. Only writers call this."""
+    """Create ``directory`` owner-only. Only writers call this. The data dir
+    itself is created 0700 but never re-permissioned: SUBCORTEX_DATA_DIR may
+    point at a directory the user shares on purpose. Our own subdirectories
+    (and the 0600 files in them) carry the privacy."""
     root = data_dir()
+    if not root.exists():
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    for d in (root, directory):  # mkdir's mode is masked by umask and skipped when it exists
-        try:
-            if d.stat().st_mode & 0o077:
-                os.chmod(d, 0o700)
-        except OSError:
-            pass
+    try:
+        if directory != root and directory.stat().st_mode & 0o077:
+            os.chmod(directory, 0o700)  # mkdir's mode is masked by umask
+    except OSError:
+        pass
     return directory
 
 

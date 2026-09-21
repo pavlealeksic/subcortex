@@ -44,19 +44,19 @@ class DaemonClient:
         if not self.autostart:
             return
         try:
-            from .config import data_dir
-            from .provision import daemon_python
+            from .config import data_dir, log_path
+            from .provision import daemon_argv
 
             stamp = data_dir() / "autostart.stamp"
             if stamp.exists() and time.time() - stamp.stat().st_mtime < AUTOSTART_INTERVAL_S:
                 return
-            stamp.parent.mkdir(parents=True, exist_ok=True)
+            stamp.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             stamp.touch()
             import subprocess
 
-            python = daemon_python()
-            with open(data_dir() / "daemon.log", "ab") as log:
-                subprocess.Popen([python, "-m", "subcortex", "serve", "--foreground"],
+            with open(log_path(), "ab") as log:
+                # cwd: never the user's project (see provision.daemon_argv).
+                subprocess.Popen(daemon_argv(), cwd=str(data_dir()),
                                  stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                  start_new_session=True, close_fds=True, env=dict(os.environ))
         except Exception:

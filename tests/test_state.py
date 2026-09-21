@@ -18,7 +18,7 @@ from unittest import mock
 
 import pathsetup  # noqa: F401
 
-from subcortex import policy, state
+from subcortex import auth, policy, state
 from subcortex.backends import laya
 from subcortex.config import DEFAULT_CONFIG
 from subcortex.daemon import create_server
@@ -88,7 +88,8 @@ class TestConsumeOnce(StateCase):
                 barrier.wait()
                 req = urllib.request.Request(f"{url}/v1/restore", method="POST",
                                              data=json.dumps({"session_id": "d1", "tui": "opencode"}).encode(),
-                                             headers={"Content-Type": "application/json"})
+                                             headers={"Content-Type": "application/json",
+                                                      auth.HEADER: auth.read_token()})
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     got.append(json.loads(resp.read())["context"])
             threads = [threading.Thread(target=restore) for _ in range(10)]

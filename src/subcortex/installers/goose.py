@@ -52,6 +52,12 @@ def _entry_lines(argv: List[str], indent: str) -> List[str]:
 
 
 def strip_entry(text: str) -> str:
+    lines_in = text.splitlines()
+    begins = [i for i, l in enumerate(lines_in) if l.strip().startswith("# >>> subcortex")]
+    if begins and not any(l.strip().startswith(END) for l in lines_in[begins[0] + 1:]):
+        # Removing "to the end of the file" could delete the user's own settings.
+        raise InstallError(f"the subcortex block in the goose config has no end marker ({END}); "
+                           "remove it by hand, then retry")
     out, inside = [], False
     for line in text.splitlines(keepends=True):
         stripped = line.strip()

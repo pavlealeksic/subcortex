@@ -95,6 +95,35 @@ class TestMarkedBlock(unittest.TestCase):
         self.assertEqual(base.strip_block(merged), "")
 
 
+class TestUserBytesSurvive(unittest.TestCase):
+    def test_strip_block_touches_nothing_but_the_block(self):
+        user = 'rules = """Rule 1.\n\n\n\nRule 2."""\n\n\n[profiles.work]\nmodel = "x"\n'
+        merged = base.append_block(user, "a = 1", "kimi")
+        self.assertEqual(base.strip_block(merged), user)
+        middle = user + base.append_block("", "a = 1", "kimi") + "\n[after]\nkept = true\n"
+        self.assertEqual(base.strip_block(middle), user + "\n[after]\nkept = true\n")
+
+    def test_a_block_without_its_end_marker_is_refused_not_truncated(self):
+        broken = "a = 1\n# >>> subcortex (managed)\nb = 2\n[profiles.work]\nmodel = 'keep me'\n"
+        with self.assertRaises(base.InstallError):
+            base.strip_block(broken)
+        from subcortex.installers import goose
+
+        with self.assertRaises(base.InstallError):
+            goose.strip_entry("extensions:\n  # >>> subcortex (managed)\n  x: 1\nother: keep\n")
+
+    def test_symlinked_config_stays_a_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            real = Path(tmp, "dotfiles", "settings.json")
+            real.parent.mkdir()
+            real.write_text('{"model": "opus"}')
+            link = Path(tmp, "settings.json")
+            link.symlink_to(real)
+            base.atomic_write(link, '{"model": "opus", "hooks": {}}')
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(json.loads(real.read_text()), {"model": "opus", "hooks": {}})
+
+
 class TestFiles(unittest.TestCase):
     def test_atomic_write_keeps_mode_and_backup_is_timestamped(self):
         with tempfile.TemporaryDirectory() as tmp:

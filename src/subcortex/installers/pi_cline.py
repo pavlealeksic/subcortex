@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 from typing import List
 
-from .base import Installer, Target, bundled_plugin, daemon_url, mcp_json_target, plugin_file_target
+from .base import Installer, Target, rendered_plugin, mcp_json_target, plugin_file_target
 from .mcp_only import cline_dir, cline_mcp_path
 
 
@@ -31,7 +31,7 @@ class PiInstaller(Installer):
         return (Path(override) if override else Path.home() / ".pi" / "agent") / "extensions"
 
     def targets(self) -> List[Target]:
-        content = bundled_plugin("pi", "subcortex.ts").replace("__SUBCORTEX_URL__", daemon_url())
+        content = rendered_plugin("pi")
         return [plugin_file_target(self.extensions_dir() / "subcortex.ts", content)]
 
 
@@ -46,7 +46,7 @@ class ClineInstaller(Installer):
     post_install = "new cline runs load the plugin"
 
     def targets(self) -> List[Target]:
-        content = bundled_plugin("cline", "subcortex.ts").replace("__SUBCORTEX_URL__", daemon_url())
+        content = rendered_plugin("cline")
         targets = [plugin_file_target(cline_dir() / "plugins" / "subcortex.ts", content)]
         if self.mcp:
             targets.append(mcp_json_target(cline_mcp_path(), self.mcp_command(), extra={"type": "stdio"}))

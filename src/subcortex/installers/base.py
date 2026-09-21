@@ -24,6 +24,7 @@ import difflib
 import json
 import os
 import shlex
+import secrets
 import shutil
 import socket
 import subprocess
@@ -130,6 +131,10 @@ def backup(path: Path) -> Optional[Path]:
 
 
 def atomic_write(path: Path, text: str) -> None:
+    """Replace ``path``'s content atomically, keeping its mode. A symlink (a
+    dotfiles setup) stays a symlink: the file it points to is what changes."""
+    if path.is_symlink():
+        path = Path(os.path.realpath(path))
     path.parent.mkdir(parents=True, exist_ok=True)
     mode = path.stat().st_mode & 0o777 if path.exists() else None
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
@@ -259,22 +264,24 @@ def has_block(text: str, comment: str = "#") -> bool:
 
 
 def strip_block(text: str, comment: str = "#") -> str:
-    out: List[str] = []
-    inside = False
-    for line in text.splitlines(keepends=True):
-        stripped = line.strip()
-        if stripped.startswith(f"{comment} >>> subcortex"):
-            inside = True
-            continue
-        if inside and stripped.startswith(f"{comment} {BLOCK_END}"):
-            inside = False
-            continue
-        if not inside:
-            out.append(line)
-    cleaned = "".join(out)
-    while "\n\n\n" in cleaned:
-        cleaned = cleaned.replace("\n\n\n", "\n\n")
-    return cleaned.strip("\n") + "\n" if cleaned.strip() else ""
+    """``text`` without our marked block(s) and the blank line ``append_block``
+    put before each. Every other byte stays as it was. A block whose end marker
+    is missing is refused rather than guessed at: removing "to the end of the
+    file" could delete the user's own settings."""
+    lines = text.splitlines(keepends=True)
+    begin = next((i for i, line in enumerate(lines)
+                  if line.strip().startswith(f"{comment} >>> subcortex")), None)
+    if begin is None:
+        return text
+    end = next((j for j in range(begin + 1, len(lines))
+                if lines[j].strip().startswith(f"{comment} {BLOCK_END}")), None)
+    if end is None:
+        raise InstallError("the subcortex block in this file has no end marker "
+                           f"({comment} {BLOCK_END}); remove it by hand, then retry")
+    before, after = lines[:begin], lines[end + 1:]
+    if before and not before[-1].strip():
+        before = before[:-1]  # the separator append_block added
+    return strip_block("".join(before + after), comment)
 
 
 def append_block(text: str, body: str, tui: str, comment: str = "#") -> str:
@@ -437,7 +444,11 @@ def self_test(tui: str, cases: List[Tuple[str, str, Dict[str, Any]]],
             if code != 0 or err.strip() or out.strip():
                 problems.append(f"dangling executable: exit {code}, stderr {err.strip()[:200]!r}, "
                                 f"stdout {out.strip()[:200]!r} (must be 0 / silent)")
-        server = create_server(0, cfg, backend_factory=lambda c, name=None: _StubBackend())
+        token = secrets.token_hex(32)
+        stub_dir = Path(tmp) / "stub-daemon"
+        stub_dir.mkdir(mode=0o700)
+        (stub_dir / "token").write_text(token)  # what the hooks of this pass will read
+        server = create_server(0, cfg, backend_factory=lambda c, name=None: _StubBackend(), token=token)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
             run_pass("stub-daemon", server.server_address[1], must_respond=True)
@@ -559,6 +570,14 @@ def bundled_plugin(tui: str, filename: str) -> str:
         return path.read_text(encoding="utf-8")
     except OSError as exc:
         raise InstallError(f"bundled plugin {path} is missing from this installation") from exc
+
+
+def rendered_plugin(tui: str, filename: str = "subcortex.ts") -> str:
+    """A bundled plugin with this machine's daemon URL and token file filled in."""
+    from ..auth import token_path
+
+    return (bundled_plugin(tui, filename).replace("__SUBCORTEX_URL__", daemon_url())
+            .replace("__SUBCORTEX_TOKEN_FILE__", str(token_path())))
 
 
 def daemon_url() -> str:
@@ -710,7 +729,12 @@ class Installer:
             return []
         return self_test(self.name, cases, self.expects_output)
 
-    def _apply(self, result: Result, plans: List[Plan]) -> None:
+    def _apply(self, result: Result, plans: List[Plan], uninstall: bool = False) -> None:
+        # Planning ran seconds ago (the self-test is slow). If the TUI wrote one
+        # of these files meanwhile, merge into its latest text instead of
+        # overwriting its change with our stale copy.
+        if any(p.changed and read_text(p.path) != p.before for p in plans):
+            plans = self.plans(uninstall=uninstall)
         for plan in plans:
             if not plan.changed:
                 continue
@@ -719,6 +743,8 @@ class Installer:
                 result.backups.append(str(saved))
             if plan.after.strip():
                 atomic_write(plan.path, plan.after)
+            elif plan.path.is_symlink():
+                atomic_write(plan.path, "{}\n" if plan.path.suffix == ".json" else "")  # keep the link
             elif plan.path.exists():
                 plan.path.unlink()  # the file only ever held our entries
             result.changed = True
@@ -768,7 +794,7 @@ class Installer:
         if not any(p.changed for p in plans):
             result.messages.append("nothing of ours to remove")
         elif not dry_run:
-            self._apply(result, plans)
+            self._apply(result, plans, uninstall=True)
         result.ok = True
         return result
 

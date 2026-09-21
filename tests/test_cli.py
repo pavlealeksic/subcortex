@@ -3,9 +3,11 @@ import copy
 import io
 import json
 import os
+import subprocess
+import sys
 import threading
-from pathlib import Path
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import pathsetup  # noqa: F401
@@ -75,18 +77,29 @@ class TestCli(CliFixture):
         self.assertEqual(code, 2)
         self.assertIn("JSON", err)
 
-    def test_stats(self):
-        code, out, _ = self.run_cli(["stats"])
+    def test_stats_report_what_was_delivered(self):
+        from subcortex import ledger
+
+        ledger.record("hint", "claude-code")
+        ledger.record("trim", "claude-code", before=40000, after=4000)
+        ledger.record("restore", "codex")
+        ledger.record("jev", tokens=1_000_000, usd=0.042)
+        code, out, _ = self.run_cli(["stats", "--json"])
         self.assertEqual(code, 0)
         data = json.loads(out)
-        self.assertIn("uptime_s", data)
-        self.assertIn("counts", data)
+        self.assertGreaterEqual(data["total"]["trims"], 1)
+        self.assertGreaterEqual(data["total"]["chars_removed"], 36000)
+        self.assertGreaterEqual(data["total"]["jev_cost_usd"], 0.042)
+        self.assertIn("uptime_s", data["daemon"])
+        code, out, _ = self.run_cli(["stats"])
+        self.assertIn("tokens of context saved", out)
+        self.assertIn("claude-code", out)
 
-    def test_stats_daemon_down(self):
+    def test_stats_work_with_the_daemon_down(self):
         with mock.patch.dict(os.environ, {"SUBCORTEX_PORT": "1"}):
-            code, _, err = self.run_cli(["stats"])
-        self.assertEqual(code, 1)
-        self.assertIn("not reachable", err)
+            code, out, _ = self.run_cli(["stats"])
+        self.assertEqual(code, 0)
+        self.assertIn("daemon not running", out)
 
 
 class TestTuiCommands(unittest.TestCase):
@@ -168,6 +181,40 @@ class TestWrap(CliFixture):
     def test_small_output_is_untouched(self):
         code, out, _ = self.run_cli(["wrap", "--", "echo", "hello"])
         self.assertEqual((code, out), (0, "hello\n"))
+
+    def run_wrap(self, *command):
+        env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
+        proc = subprocess.run([sys.executable, "-m", "subcortex", "wrap", "--", *command],
+                              capture_output=True, env=env, timeout=60)
+        return proc.returncode, proc.stdout
+
+    def test_bytes_pass_through_exactly_when_nothing_is_trimmed(self):
+        code, out = self.run_wrap("sh", "-c", r"printf 'caf\351 \377\376 ok\n'")
+        self.assertEqual((code, out), (0, b"caf\xe9 \xff\xfe ok\n"))
+
+    def test_a_signal_death_keeps_the_shell_convention(self):
+        code, _ = self.run_wrap("sh", "-c", "kill -TERM $$")
+        self.assertEqual(code, 128 + 15)
+
+    def test_large_routine_output_is_trimmed(self):
+        self.server.shutdown()  # swap in a sure model that calls everything disposable
+        self.server.server_close()
+
+        class Sure:
+            name = "jev"
+
+            def predict(self, state, questions):
+                from subcortex.verdicts import canned_answers
+
+                return canned_answers(questions)
+        self.server = daemon.create_server(0, config=copy.deepcopy(DEFAULT_CONFIG),
+                                           backend_factory=lambda c, name=None: Sure())
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        os.environ["SUBCORTEX_PORT"] = str(self.server.server_address[1])
+        code, out = self.run_wrap("sh", "-c", "yes 'compiling module ok' | head -1500")
+        self.assertEqual(code, 0)
+        self.assertIn(b"[subcortex: truncated", out)
+        self.assertLess(len(out), 1500 * 22 * 0.8)
 
     def test_missing_command(self):
         code, _, err = self.run_cli(["wrap", "--", "/nonexistent/binary"])

@@ -47,6 +47,20 @@ def daemon_python() -> str:
     return str(VENV_PYTHON) if VENV_PYTHON.exists() else sys.executable
 
 
+def daemon_argv(python: Optional[str] = None) -> List[str]:
+    """How to start the daemon. Isolated (``-I``): PYTHONPATH and friends are
+    ignored and the working directory never lands on sys.path, so a project's
+    own ``json.py`` can't break the daemon or run inside it. Callers also start
+    it from the data dir, never the user's project."""
+    python = python or daemon_python()
+    root = source_checkout()
+    if root:  # dev checkout: run this code, whatever the interpreter
+        boot = (f"import sys; sys.path.insert(0, {str(root / 'src')!r}); "
+                "from subcortex.cli import main; sys.exit(main(['serve', '--foreground']))")
+        return [python, "-I", "-c", boot]
+    return [python, "-I", "-m", "subcortex", "serve", "--foreground"]
+
+
 def source_checkout() -> Optional[Path]:
     """Repo root when subcortex runs from a source checkout (dev / editable install)."""
     root = Path(__file__).resolve().parents[2]

@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 from xml.sax.saxutils import escape
 
-from .config import log_path
-from .provision import daemon_python, source_checkout
+from .config import data_dir, log_path
+from .provision import daemon_argv, daemon_python
 
 LABEL = "ai.subcortex.daemon"
 Runner = Callable[[Sequence[str]], subprocess.CompletedProcess]
@@ -49,15 +49,12 @@ def _environment() -> Dict[str, str]:
     for key in ("SUBCORTEX_CONFIG", "SUBCORTEX_DATA_DIR"):
         if os.environ.get(key):
             env[key] = os.environ[key]
-    root = source_checkout()
-    if root:
-        env["PYTHONPATH"] = str(root / "src")
     return env
 
 
 def render(python: Optional[str] = None) -> str:
-    python = python or daemon_python()
-    argv = [python, "-m", "subcortex", "serve", "--foreground"]
+    argv = daemon_argv(python or daemon_python())  # isolated; see provision.daemon_argv
+    workdir = str(data_dir())
     env = _environment()
     if platform_kind() == "launchd":
         args = "".join(f"\n    <string>{escape(a)}</string>" for a in argv)
@@ -73,6 +70,7 @@ def render(python: Optional[str] = None) -> str:
   <key>EnvironmentVariables</key>
   <dict>{envs}
   </dict>
+  <key>WorkingDirectory</key><string>{escape(workdir)}</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key>
   <dict><key>SuccessfulExit</key><false/></dict>
@@ -89,6 +87,7 @@ Description=subcortex decision daemon
 
 [Service]
 ExecStart={exec_start}
+WorkingDirectory={_systemd_quote(workdir)}
 {env_lines}
 Restart=on-failure
 RestartSec=30

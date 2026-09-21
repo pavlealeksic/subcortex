@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pathsetup  # noqa: F401
 
+from subcortex import auth
 from subcortex.config import DEFAULT_CONFIG
 from subcortex.daemon import create_server
 from subcortex.installers.base import bundled_plugin
@@ -163,11 +164,16 @@ class PluginCase(unittest.TestCase):
 
     def run_plugin(self, tui, driver):
         work = Path(tempfile.mkdtemp(dir=self.tmp.name))
-        (work / "plugin.ts").write_text(bundled_plugin(tui, "subcortex.ts").replace("__SUBCORTEX_URL__", self.url))
+        (work / "plugin.ts").write_text(bundled_plugin(tui, "subcortex.ts").replace("__SUBCORTEX_URL__", self.url)
+                                        .replace("__SUBCORTEX_TOKEN_FILE__", str(auth.token_path())))
         (work / "driver.ts").write_text(driver.replace("BIG_TEXT", json.dumps(BIG)))
         import os
-        env = dict(os.environ, SUBCORTEX_DATA_DIR=self.tmp.name)
+        # A dead proxy in the environment: the plugins must reach the daemon anyway
+        # (Bun routes even loopback fetches through HTTP_PROXY).
+        dead = "http://127.0.0.1:9"
+        env = dict(os.environ, HTTP_PROXY=dead, http_proxy=dead, HTTPS_PROXY=dead, ALL_PROXY=dead)
         env.pop("SUBCORTEX_URL", None)
+        env.pop("SUBCORTEX_DATA_DIR", None)  # the templated token path must be enough
         proc = subprocess.run([BUN, "run", "driver.ts"], cwd=work, capture_output=True, text=True,
                               timeout=60, env=env)
         self.assertEqual(proc.returncode, 0, proc.stderr)

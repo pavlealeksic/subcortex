@@ -42,20 +42,17 @@ def _daemon_interpreter() -> str:
 
 def _spawn_daemon(cfg: Dict[str, Any]) -> subprocess.Popen:
     """Spawn a detached background daemon (new session, logs to daemon.log)."""
-    env = dict(os.environ)
-    from .provision import source_checkout
+    from .config import data_dir
+    from .provision import daemon_argv
 
-    root = source_checkout()
-    if root:  # dev checkout: make the daemon run this code, whatever its interpreter
-        env["PYTHONPATH"] = str(root / "src") + os.pathsep + env.get("PYTHONPATH", "")
     log_path().parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    log = open(log_path(), "ab")
-    proc = subprocess.Popen(
-        [_daemon_interpreter(), "-m", "subcortex", "serve", "--foreground"],
-        stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-        start_new_session=True, env=env,
-    )
-    return proc
+    with open(log_path(), "ab") as log:
+        # Isolated and started from the data dir: see provision.daemon_argv.
+        return subprocess.Popen(
+            daemon_argv(_daemon_interpreter()), cwd=str(data_dir()),
+            stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            start_new_session=True, env=dict(os.environ),
+        )
 
 
 def _wait_for_health(cfg: Dict[str, Any], timeout_s: float = 30.0) -> Optional[Dict[str, Any]]:
@@ -84,7 +81,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if args.stop:
         return _stop_daemon()
     if args.foreground:
-        return daemon.run(config=cfg)
+        return daemon.run()  # loads and watches the config itself
     health = _health(cfg)
     if health:
         print(f"subcortex daemon already running on 127.0.0.1:{cfg['port']} "
@@ -100,25 +97,54 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 1
 
 
+def _daemon_running() -> bool:
+    """True when some process holds the daemon's single-instance lock."""
+    import fcntl
+
+    from .config import lock_path
+
+    try:
+        with open(lock_path(), "a") as fd:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return True
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            return False
+    except OSError:
+        return False
+
+
 def _stop_daemon() -> int:
+    """SIGTERM the daemon, but only after confirming the PID is really it: a
+    stale PID file may name a process that has nothing to do with us."""
+    cfg = load_config()
     try:
         pid = int(pid_path().read_text().strip())
     except (OSError, ValueError):
-        print("no daemon PID file; is the daemon running?", file=sys.stderr)
+        pid = None
+    if not _daemon_running():
+        if pid is not None:
+            print(f"no daemon is running; removing the stale PID file (pid {pid} left alone)")
+            try:
+                pid_path().unlink()
+            except OSError:
+                pass
+            return 0
+        print("no daemon is running", file=sys.stderr)
+        return 1
+    health = _health(cfg)
+    if pid is None or not health or health.get("pid") != pid:
+        print("a daemon holds the lock but its PID can't be confirmed "
+              f"(PID file: {pid}, daemon says: {health.get('pid') if health else 'no answer'}); "
+              "not signalling anything", file=sys.stderr)
         return 1
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        print(f"daemon pid {pid} is not running; cleaning up PID file")
-        try:
-            pid_path().unlink()
-        except OSError:
-            pass
         return 0
     for _ in range(50):
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+        if not _daemon_running():
             break
         time.sleep(0.1)
     print(f"stopped subcortex daemon (pid {pid})")
@@ -152,14 +178,40 @@ def cmd_decide(args: argparse.Namespace) -> int:
 
 
 def cmd_stats(args: argparse.Namespace) -> int:
+    """What subcortex did (from the ledger) and what it cost."""
+    from . import ledger
+
+    since = time.time() - args.days * 86400 if getattr(args, "days", None) else None
+    report = ledger.summary(since)
     cfg = load_config()
     try:
-        resp = _http(cfg, "GET", "/stats")
+        report["daemon"] = _http(cfg, "GET", "/stats", timeout=2)
     except Exception:
-        print(f"daemon not reachable on 127.0.0.1:{cfg['port']} "
-              "(start it with: subcortex serve)", file=sys.stderr)
-        return 1
-    print(json.dumps(resp, indent=2))
+        report["daemon"] = None
+    if getattr(args, "json", False):
+        print(json.dumps(report, indent=2))
+        return 0
+    total = report["total"]
+    window = f"last {args.days:g} days" if since else "since the first recorded event"
+    print(f"subcortex {__version__} — {window}\n")
+    print(f"  prompt hints delivered   {total['hints']}")
+    print(f"  tool outputs trimmed     {total['trims']}  "
+          f"(~{total['chars_removed'] // 4:,} tokens of context saved, {total['chars_removed']:,} chars)")
+    print(f"  compaction restores      {total['restores']}")
+    if total["jev_calls"]:
+        print(f"  jev decisions            {total['jev_calls']}  "
+              f"({total['jev_input_tokens']:,} input tokens, ${total['jev_cost_usd']:.4f})")
+    if report["per_tui"]:
+        print("\n  per TUI:")
+        for tui, row in sorted(report["per_tui"].items()):
+            print(f"    {tui:18s} hints {row['hints']:<5} trims {row['trims']:<5} "
+                  f"~{row['chars_removed'] // 4:,} tokens saved   restores {row['restores']}")
+    daemon_stats = report["daemon"]
+    if daemon_stats:
+        print(f"\n  daemon up {daemon_stats.get('uptime_s', 0):.0f}s; "
+              f"model {daemon_stats.get('latest', {}).get('jev_model', cfg.get('backend'))}")
+    else:
+        print(f"\n  daemon not running on 127.0.0.1:{cfg['port']} (it starts with the next hook)")
     return 0
 
 
@@ -212,6 +264,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             if not installer.status()["installed"]:
                 continue
             missing = [exe for exe in installer.installed_executables() if not os.access(exe, os.X_OK)]
+            # Re-installing would change the files: older hook commands (no -I
+            # isolation) or a plugin copy from an older subcortex.
+            outdated = any(plan.changed for plan in installers.get_installer(name).plans())
         except Exception as exc:
             print(f"[FAIL] {name}: could not read its config ({exc})")
             ok = False
@@ -221,6 +276,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             ok = False
             print(f"[FAIL] {name}: hook executable missing: {', '.join(missing)}")
             print(f"       fix: subcortex install {name}  (rewrites the hooks for this install)")
+        elif outdated:
+            ok = False
+            print(f"[FAIL] {name}: installed by an older subcortex")
+            print(f"       fix: subcortex install {name}")
         else:
             print(f"[ok] {name}: hooks installed")
     if not wired:
@@ -382,21 +441,35 @@ def cmd_wrap(args: argparse.Namespace) -> int:
     except OSError as exc:
         print(f"subcortex wrap: {exc}", file=sys.stderr)
         return 127
-    output = proc.stdout.decode("utf-8", errors="replace")
-    text = output
-    if proc.returncode == 0:
+    raw = proc.stdout
+    code = proc.returncode if proc.returncode >= 0 else 128 - proc.returncode  # killed by a signal
+    replacement = None
+    if proc.returncode == 0 and len(raw) <= WRAP_MAX_TRIM_BYTES:
         try:
             from . import policy
             from .client import DaemonClient
 
             cfg = load_config()
-            text = policy.trim_output(output, cfg, DaemonClient(cfg).judge,
-                                      tool="shell", tool_input={"command": " ".join(argv)}) or output
+            command = " ".join(argv)
+            # Aider can't tell us the user's request; what this run is for is known.
+            task = f"Check whether `{command}` succeeds and act on anything it reports."
+            replacement = policy.trim_output(raw.decode("utf-8", errors="replace"), cfg,
+                                             DaemonClient(cfg).judge, tool="shell",
+                                             tool_input={"command": command}, task=task)
         except Exception:
-            text = output
-    sys.stdout.write(text)
-    sys.stdout.flush()
-    return proc.returncode
+            replacement = None
+    out = getattr(sys.stdout, "buffer", None)
+    if out is None:  # stdout replaced by a text stream (embedding, tests)
+        sys.stdout.write(replacement or raw.decode("utf-8", errors="replace"))
+        sys.stdout.flush()
+        return code
+    # Untouched output goes through byte for byte (whatever its encoding).
+    out.write(replacement.encode("utf-8", errors="replace") if replacement else raw)
+    out.flush()
+    return code
+
+
+WRAP_MAX_TRIM_BYTES = 32 * 1024 * 1024
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
@@ -582,7 +655,9 @@ def build_parser() -> argparse.ArgumentParser:
                           help="override the configured backend for this call")
     p_decide.set_defaults(func=cmd_decide)
 
-    p_stats = sub.add_parser("stats", help="pretty-print daemon /stats")
+    p_stats = sub.add_parser("stats", help="what subcortex did: hints, trims (tokens saved), restores, jev cost")
+    p_stats.add_argument("--days", type=float, default=None, help="only the last N days")
+    p_stats.add_argument("--json", action="store_true", help="machine-readable output")
     p_stats.set_defaults(func=cmd_stats)
 
     p_doctor = sub.add_parser("doctor", help="check config, backend and daemon health")
