@@ -104,6 +104,25 @@ class TestClaudeCode(E2ECase):
             self.assertIn("\\n3000", tool_turn)       # the tail survived
             self.assertNotIn("\\n1500\\n", tool_turn)  # the middle did not
 
+    def test_compaction_snapshot_survives_compact(self):
+        import uuid
+
+        with MockLLM() as llm:
+            env = dict(self.env(llm.url), PWD=str(self.root / "work"))
+            self.install("claude-code", env)
+            session = str(uuid.uuid4())
+            for args in (["--session-id", session, "remember the codeword PELICAN-42"],
+                         ["--resume", session, "/compact"]):
+                proc = self.run_tui(["claude", "-p", *args, "--output-format", "json"], env)
+                self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+            before = len(llm.requests)
+            proc = self.run_tui(["claude", "-p", "--resume", session, "what was the codeword?",
+                                 "--output-format", "json"], env)
+            self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+            after = json.dumps([r["body"] for r in llm.requests[before:]])
+            self.assertIn("[subcortex] Recent conversation from before context compaction", after)
+            self.assertIn("PELICAN-42", after)
+
     def test_hooks_never_block_even_with_the_daemon_down(self):
         with MockLLM() as llm:
             env = self.env(llm.url)
