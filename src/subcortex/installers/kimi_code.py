@@ -29,7 +29,8 @@ class KimiCodeInstaller(Installer):
     post_install = "restart kimi so it loads the new hooks"
 
     def version_problem(self, version_output: str) -> Optional[str]:
-        if version_output.strip().lower().startswith("kimi, version"):
+        # "kimi-cli <v>" is the dist-info of the legacy Python CLI (installed_version).
+        if version_output.strip().lower().replace("_", "-").startswith(("kimi, version", "kimi-cli ")):
             return ("this `kimi` is the legacy Python kimi-cli (~/.kimi), not Kimi Code CLI; "
                     "install @moonshot-ai/kimi-code")
         return super().version_problem(version_output)

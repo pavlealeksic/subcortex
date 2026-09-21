@@ -619,6 +619,47 @@ def plugin_file_target(dest: Path, content: str) -> Target:
     return Target(dest, merge, unmerge, ours)
 
 
+def installed_version(binary: str) -> Optional[str]:
+    """``"<package> <version>"`` (or just the version) of an installed TUI, read
+    from how it was installed — never by running it: some TUIs' ``--version``
+    refreshes logins, sends telemetry or starts a self-update."""
+    import re
+
+    try:
+        real = Path(os.path.realpath(binary))
+    except (OSError, ValueError):
+        return None
+    # npm / bun: the package.json of the package that ships the binary.
+    for parent in list(real.parents)[:6]:
+        manifest = parent / "package.json"
+        if manifest.is_file():
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                break
+            if isinstance(data, dict) and isinstance(data.get("version"), str):
+                return f"{data.get('name') or ''} {data['version']}".strip()
+            break
+    # A Python tool's venv (uv tool, pipx, a venv): the dist-info declaring this script.
+    if real.parent.name == "bin" or Path(binary).parent.name == "bin":
+        for bin_dir in {real.parent, Path(binary).parent}:
+            for info in bin_dir.parent.glob("lib/python*/site-packages/*.dist-info"):
+                try:
+                    entry_points = (info / "entry_points.txt").read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                if re.search(rf"^\s*{re.escape(Path(binary).name)}\s*=", entry_points, re.M):
+                    name, _, version = info.name[:-len(".dist-info")].rpartition("-")
+                    return f"{name} {version}"
+    # A version-named file or directory: Homebrew's Cellar/<name>/<v>/, .../versions/<v>.
+    version_part = re.compile(r"v?(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?)")
+    for part in (real.name, *reversed(real.parent.parts)):
+        match = version_part.fullmatch(part)
+        if match:
+            return match.group(1)
+    return None
+
+
 def parse_version(text: str) -> Optional[Tuple[int, ...]]:
     import re
 
@@ -639,7 +680,6 @@ class Installer:
     docs: str = ""
     post_install: str = ""         # printed after a successful install
     min_version: Optional[str] = None
-    version_args: Tuple[str, ...] = ("--version",)
     supports_mcp: bool = False     # can also register the `subcortex mcp` server
 
     def __init__(self, mcp: bool = False) -> None:
@@ -698,18 +738,17 @@ class Installer:
         return None
 
     def check_version(self) -> Tuple[Optional[str], Optional[str]]:
-        """(blocking problem, warning) from the installed binary's version."""
+        """(blocking problem, warning) from the installed version — read from
+        the installation, never by executing the TUI (see ``installed_version``)."""
         binary = self.detected()
         if binary is None:
             return None, (f"{self.display_name} not found on PATH; writing its config anyway "
                           "so it is ready when you install it")
-        try:
-            proc = subprocess.run([binary, *self.version_args], capture_output=True, text=True,
-                                  timeout=10, stdin=subprocess.DEVNULL)
-            output = (proc.stdout or "") + (proc.stderr or "")
-        except (OSError, subprocess.TimeoutExpired):
-            return None, f"could not read the {self.display_name} version; continuing"
-        return self.version_problem(output), None
+        found = installed_version(binary)
+        if found is None:
+            return None, (f"could not tell the {self.display_name} version without running it; "
+                          f"subcortex needs {self.min_version} or newer" if self.min_version else None)
+        return self.version_problem(found), None
 
     def plans(self, uninstall: bool = False) -> List[Plan]:
         """One plan per file. Targets sharing a file (hooks + MCP entry in one

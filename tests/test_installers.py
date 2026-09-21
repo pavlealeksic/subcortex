@@ -67,6 +67,49 @@ class InstallerCase(unittest.TestCase):
         return installer.install(run_self_test=False, check_version=False, **kw)
 
 
+class TestVersionDetection(unittest.TestCase):
+    """Versions come from the installation; TUI binaries are never executed."""
+
+    def make(self, root, rel, content="#!/bin/sh\n"):
+        path = Path(root, rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        path.chmod(0o755)
+        return path
+
+    def test_layouts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            npm = self.make(tmp, "npm/lib/node_modules/@openai/codex/bin/codex.js")
+            Path(tmp, "npm/lib/node_modules/@openai/codex/package.json").write_text(
+                json.dumps({"name": "@openai/codex", "version": "0.140.1", "bin": {"codex": "bin/codex.js"}}))
+            link = Path(tmp, "npm/bin/codex")
+            link.parent.mkdir(parents=True)
+            link.symlink_to(npm)
+            self.assertEqual(base.installed_version(str(link)), "@openai/codex 0.140.1")
+            cellar = self.make(tmp, "opt/homebrew/Cellar/codex/0.34.0/bin/codex")
+            self.assertEqual(base.installed_version(str(cellar)), "0.34.0")
+            versioned = self.make(tmp, "share/claude/versions/2.1.278")
+            self.assertEqual(base.installed_version(str(versioned)), "2.1.278")
+            tool = self.make(tmp, "uv/tools/kimi-cli/bin/kimi")
+            info = Path(tmp, "uv/tools/kimi-cli/lib/python3.12/site-packages/kimi_cli-1.51.0.dist-info")
+            info.mkdir(parents=True)
+            (info / "entry_points.txt").write_text("[console_scripts]\nkimi = kimi_cli.cli:main\n")
+            self.assertEqual(base.installed_version(str(tool)), "kimi_cli 1.51.0")
+            self.assertIn("legacy", installers.get_installer("kimi-code").version_problem("kimi_cli 1.51.0"))
+            self.assertIsNone(base.installed_version(str(self.make(tmp, "home/.local/bin/droid"))))
+
+    def test_the_tui_is_never_executed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp, "EXECUTED")
+            fake = self.make(tmp, "bin/codex", f"#!/bin/sh\ntouch {marker}\necho codex-cli 0.1.0\n")
+            installer = installers.get_installer("codex")
+            with mock.patch.object(installer, "detected", return_value=str(fake)):
+                problem, warning = installer.check_version()
+            self.assertFalse(marker.exists(), "a TUI binary was executed to read its version")
+            self.assertIsNone(problem)
+            self.assertIn("without running it", warning)
+
+
 class TestConcurrentEdits(InstallerCase):
     def test_a_change_the_tui_makes_during_install_is_kept(self):
         installer = installers.get_installer("claude-code")
