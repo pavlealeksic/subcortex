@@ -1,14 +1,14 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "subcortex"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local decision layer for coding-agent TUIs: a warm daemon answering System-1 questions in milliseconds"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 
 [project.optional-dependencies]
 laya = [
@@ -18,9 +18,10 @@ laya = [
 
 [project.scripts]
 subcortex = "subcortex.cli:main"
+subcortex-hook = "subcortex.hook:entry"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-subcortex = ["adapters/opencode/*.ts"]
+subcortex = ["plugins/*/*.ts", "plugins/*/*.js", "plugins/*/*.json"]

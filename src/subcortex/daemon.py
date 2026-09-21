@@ -8,6 +8,14 @@ Endpoints:
 - ``GET  /health``         → ``{ok, backend, model}``
 - ``GET  /stats``          → in-memory counters + uptime
 
+Policy endpoints — the four behaviors from ``subcortex.policy``, for plugin-based
+TUIs (OpenCode, Amp, ...) so no plugin re-implements thresholds or heuristics:
+
+- ``POST /v1/prompt-hint``  ``{prompt}``                          → ``{success, hint|null}``
+- ``POST /v1/tool-output``  ``{output, tool?, input?, failed?}``  → ``{success, replacement|null}``
+- ``POST /v1/snapshot``     ``{session_id, messages, trigger?}``  → ``{success, saved}``
+- ``POST /v1/restore``      ``{session_id}``                      → ``{success, context|null}``
+
 Single instance via an ``fcntl`` lock at ``~/.local/share/subcortex/daemon.lock``;
 PID file and log alongside it. The backend is constructed lazily on the first
 request and its model loads lazily on the first verdict.
@@ -29,7 +37,7 @@ from .backends import get_backend
 from .backends.base import DecisionBackend
 from .config import DATA_DIR, LOCK_PATH, LOG_PATH, PID_PATH, load_config
 from .metrics import METRICS
-from . import verdicts
+from . import policy, verdicts
 
 BackendFactory = Callable[..., DecisionBackend]
 
@@ -104,6 +112,8 @@ def make_handler(state: Any):
                 self._handle_verdict_prompt()
             elif self.path == "/verdict/output":
                 self._handle_verdict_output()
+            elif self.path in _POLICY_ROUTES:
+                self._handle_policy(_POLICY_ROUTES[self.path])
             else:
                 self._send_json(404, {"success": False, "error": "not found"})
 
@@ -159,7 +169,53 @@ def make_handler(state: Any):
             else:
                 self._send_json(200, {"success": True, "verdict": verdict})
 
+        def _handle_policy(self, route: str) -> None:
+            payload = self._read_json()
+            if payload is None:
+                self._send_json(400, {"success": False, "error": "need a JSON object"})
+                return
+            cfg = state.config
+            try:
+                if route in ("prompt-hint", "tool-output"):
+                    backend = _daemon_backend(state, payload.get("backend"))
+                if route == "prompt-hint":
+                    hint = policy.prompt_hint(
+                        payload.get("prompt"), cfg,
+                        lambda p: verdicts.classify_prompt(p, backend=backend, config=cfg))
+                    METRICS.record("hint_given" if hint else "hint_skipped")
+                    result: Dict[str, Any] = {"hint": hint}
+                elif route == "tool-output":
+                    replacement = policy.trim_output(
+                        payload.get("output"), cfg,
+                        lambda o, c: verdicts.judge_output(o, context=c, backend=backend, config=cfg),
+                        tool=str(payload.get("tool") or ""),
+                        tool_input=payload.get("input"),
+                        failed=bool(payload.get("failed")))
+                    METRICS.record("output_trimmed" if replacement else "output_kept")
+                    result = {"replacement": replacement}
+                elif route == "snapshot":
+                    messages = payload.get("messages")
+                    saved = policy.save_snapshot(
+                        payload.get("session_id"), messages if isinstance(messages, list) else [],
+                        cfg, str(payload.get("trigger") or ""))
+                    result = {"saved": saved}
+                else:  # restore
+                    result = {"context": policy.restore_snapshot(payload.get("session_id"), cfg)}
+            except Exception as exc:
+                self._log(f"/v1/{route} failed: {exc}")
+                self._send_json(200, {"success": False, "error": "policy failed"})
+                return
+            self._send_json(200, {"success": True, **result})
+
     return Handler
+
+
+_POLICY_ROUTES = {
+    "/v1/prompt-hint": "prompt-hint",
+    "/v1/tool-output": "tool-output",
+    "/v1/snapshot": "snapshot",
+    "/v1/restore": "restore",
+}
 
 
 def create_server(

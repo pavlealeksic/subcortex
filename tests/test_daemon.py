@@ -130,5 +130,64 @@ class TestDaemon(unittest.TestCase):
             self.assertEqual(exc.code, 404)
 
 
+class StubPolicyBackend:
+    name = "stub"
+
+    def predict(self, state, questions):
+        if "simple" in questions:
+            return {"answers": {"simple": {"noul": 0.95}}}
+        return {"answers": {"needed": {"noul": 0.02}}}
+
+
+class TestPolicyEndpoints(unittest.TestCase):
+    """/v1/* — the shared policy served to JS plugins."""
+
+    def setUp(self):
+        import os
+        import tempfile
+        from unittest import mock
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.env = mock.patch.dict(os.environ, {"SUBCORTEX_DATA_DIR": self.tmp.name})
+        self.env.start()
+        self.d = DaemonFixture(StubPolicyBackend())
+
+    def tearDown(self):
+        self.d.stop()
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def test_prompt_hint(self):
+        body = post(self.d.url + "/v1/prompt-hint", {"prompt": "what is 2+2?"})
+        self.assertTrue(body["success"])
+        self.assertIn("simple", body["hint"])
+        self.assertIsNone(post(self.d.url + "/v1/prompt-hint", {"prompt": ""})["hint"])
+
+    def test_tool_output(self):
+        big = "compiling module\n" * 800
+        body = post(self.d.url + "/v1/tool-output", {"output": big, "tool": "bash", "input": {"command": "make"}})
+        self.assertIn("[subcortex: truncated", body["replacement"])
+        self.assertIsNone(post(self.d.url + "/v1/tool-output", {"output": big, "failed": True})["replacement"])
+        self.assertIsNone(post(self.d.url + "/v1/tool-output", {"output": "short"})["replacement"])
+
+    def test_snapshot_restore_with_raw_plugin_messages(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "fix login"}]},
+                    {"role": "info", "content": "ignored"},
+                    {"role": "assistant", "text": "Fixed."}]
+        self.assertTrue(post(self.d.url + "/v1/snapshot", {"session_id": "T-1", "messages": messages})["saved"])
+        context = post(self.d.url + "/v1/restore", {"session_id": "T-1"})["context"]
+        self.assertIn("user: fix login", context)
+        self.assertIn("assistant: Fixed.", context)
+        self.assertNotIn("ignored", context)
+        self.assertIsNone(post(self.d.url + "/v1/restore", {"session_id": "T-1"})["context"])
+
+    def test_bad_bodies(self):
+        req = urllib.request.Request(self.d.url + "/v1/prompt-hint", data=b"not json", method="POST",
+                                     headers={"Content-Type": "application/json"})
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req, timeout=5)
+        self.assertEqual(ctx.exception.code, 400)
+
+
 if __name__ == "__main__":
     unittest.main()

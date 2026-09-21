@@ -5,7 +5,9 @@ where we don't ship a native hook adapter: the agent can call these tools on dem
 Automatic interception (prompt classify, output filtering) lives in the hook
 adapters — MCP tools are model-invoked, so they serve on-demand decisions only.
 
-Zero dependencies: MCP speaks JSON-RPC over stdio with Content-Length framing.
+Zero dependencies. Transport per the MCP spec's stdio transport: one JSON-RPC
+message per line (UTF-8, newline-delimited, no embedded newlines) on
+stdin/stdout; nothing but protocol messages is ever written to stdout.
 """
 
 from __future__ import annotations
@@ -13,13 +15,17 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import urllib.error
 import urllib.request
 from typing import Any, Dict, Optional
+
+from . import __version__
 
 logger = logging.getLogger(__name__)
 
 _PROTOCOL_VERSION = "2025-06-18"
-_SERVER_INFO = {"name": "subcortex", "version": "0.1.0"}
+_SUPPORTED_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+_SERVER_INFO = {"name": "subcortex", "version": __version__}
 
 _TOOLS = [
     {
@@ -66,21 +72,38 @@ _TOOLS = [
 
 
 def _daemon_url() -> str:
-    from . import config
+    from .config import load_config
 
-    cfg = config.load()
-    return f"http://127.0.0.1:{cfg.get('port', 7707)}"
+    return f"http://127.0.0.1:{int(load_config()['port'])}"
+
+
+def _ensure_daemon() -> None:
+    """Start the daemon on first use if it isn't running (best effort)."""
+    from . import cli
+    from .config import load_config
+
+    cfg = load_config()
+    if cli._health(cfg) is None:
+        cli._spawn_daemon(cfg)
+        cli._wait_for_health(cfg)
 
 
 def _post(path: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    req = urllib.request.Request(
-        _daemon_url() + path,
-        data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode())
+    def once() -> Dict[str, Any]:
+        req = urllib.request.Request(
+            _daemon_url() + path,
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode())
+
+    try:
+        return once()
+    except urllib.error.URLError:
+        _ensure_daemon()
+        return once()
 
 
 def _call_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -107,8 +130,9 @@ def _handle(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
 
     if method == "initialize":
+        requested = (request.get("params") or {}).get("protocolVersion")
         return result({
-            "protocolVersion": _PROTOCOL_VERSION,
+            "protocolVersion": requested if requested in _SUPPORTED_VERSIONS else _PROTOCOL_VERSION,
             "capabilities": {"tools": {}},
             "serverInfo": _SERVER_INFO,
         })
@@ -131,49 +155,38 @@ def _handle(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return error(-32601, f"method not found: {method}")
 
 
-def _read_message(stream) -> Optional[Dict[str, Any]]:
-    """Read one Content-Length framed JSON-RPC message; None on clean EOF."""
-    headers = {}
-    while True:
-        line = stream.buffer.readline()
-        if not line:
+def _respond(message: Any) -> Optional[Any]:
+    """Response for one parsed message (a request object or a legacy batch)."""
+    if isinstance(message, list):
+        replies = [r for r in (_respond(m) for m in message) if r is not None]
+        return replies or None
+    if not isinstance(message, dict):
+        return {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "invalid request"}}
+    try:
+        return _handle(message)
+    except Exception as exc:  # never die on one bad request
+        logger.debug("mcp: handler error: %s", exc)
+        if message.get("id") is None:
             return None
+        return {"jsonrpc": "2.0", "id": message["id"],
+                "error": {"code": -32603, "message": str(exc)}}
+
+
+def serve(stdin=None, stdout=None) -> None:
+    """Run the stdio MCP server loop until EOF."""
+    stdin = stdin or sys.stdin
+    stdout = stdout or sys.stdout
+    for line in stdin:
         line = line.strip()
         if not line:
-            break
-        key, _, value = line.decode("ascii", "replace").partition(":")
-        headers[key.strip().lower()] = value.strip()
-    length = int(headers.get("content-length", "0"))
-    if length <= 0:
-        return None
-    body = stream.buffer.read(length)
-    return json.loads(body.decode("utf-8"))
-
-
-def _write_message(stream, message: Dict[str, Any]) -> None:
-    body = json.dumps(message).encode("utf-8")
-    stream.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii") + body)
-    stream.buffer.flush()
-
-
-def serve() -> None:
-    """Run the stdio MCP server loop until EOF."""
-    while True:
-        try:
-            request = _read_message(sys.stdin)
-        except Exception as exc:
-            logger.debug("mcp: bad message: %s", exc)
             continue
-        if request is None:
-            return
         try:
-            response = _handle(request)
-        except Exception as exc:  # never die on one bad request
-            logger.debug("mcp: handler error: %s", exc)
-            if request.get("id") is not None:
-                response = {"jsonrpc": "2.0", "id": request["id"],
-                            "error": {"code": -32603, "message": str(exc)}}
-            else:
-                continue
-        if response is not None:
-            _write_message(sys.stdout, response)
+            message = json.loads(line)
+        except ValueError:
+            reply: Any = {"jsonrpc": "2.0", "id": None,
+                          "error": {"code": -32700, "message": "parse error"}}
+        else:
+            reply = _respond(message)
+        if reply is not None:
+            stdout.write(json.dumps(reply, ensure_ascii=False) + "\n")
+            stdout.flush()

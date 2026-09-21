@@ -1,4 +1,4 @@
-"""subcortex command line: serve / decide / stats / doctor."""
+"""subcortex command line: serve / decide / stats / doctor / hook / install / uninstall / status / mcp."""
 
 from __future__ import annotations
 
@@ -210,54 +210,146 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
-_TUIS = ("claude-code", "codex", "opencode")
+def _resolve_tuis(args: argparse.Namespace) -> Optional[list]:
+    from . import installers
+
+    requested = list(args.tuis or []) + ([args.tui] if getattr(args, "tui", None) else [])
+    if not requested:
+        print("name at least one TUI (see: subcortex tuis)", file=sys.stderr)
+        return None
+    if requested == ["all"]:
+        return installers.names()
+    resolved = []
+    for name in requested:
+        key = installers.canonical_name(name)
+        if key is None:
+            print(f"unknown TUI {name!r}; supported: {', '.join(installers.names())}",
+                  file=sys.stderr)
+            return None
+        resolved.append(key)
+    return resolved
 
 
-def _installer(tui: str):
-    if tui == "claude-code":
-        from .installers import claude_code
-        return claude_code
-    if tui == "codex":
-        from .installers import codex
-        return codex
-    if tui == "opencode":
-        from .installers import opencode
-        return opencode
-    raise ValueError(f"unknown TUI {tui!r}")
+def _confirm(prompt: str) -> bool:
+    if not sys.stdin.isatty():
+        return False
+    try:
+        return input(f"{prompt} [y/N] ").strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
 
 
-def cmd_hook(args: argparse.Namespace) -> int:
-    """TUI hook entry point: payload JSON on stdin, response JSON on stdout."""
-    if args.tui == "claude-code":
-        from .adapters import claude_code
-        return claude_code.main([args.event])
-    if args.tui == "codex":
-        from .adapters import codex
-        return codex.main([args.event])
-    print(f"no hook adapter for {args.tui!r} (OpenCode uses its TS plugin)",
-          file=sys.stderr)
-    return 0  # fail-open: never block a TUI on our mistakes
+def _print_result(result) -> None:
+    status = "ok" if result.ok else "FAILED"
+    print(f"[{status}] {result.action} {result.tui}: {', '.join(result.paths)}")
+    for saved in result.backups:
+        print(f"       backup: {saved}")
+    for message in result.messages:
+        print(f"       {message}")
 
 
 def cmd_install(args: argparse.Namespace) -> int:
+    from .installers import get_installer
+
+    tuis = _resolve_tuis(args)
+    if tuis is None:
+        return 2
     if args.backend:
         from .config import save_config
+
         save_config({"backend": args.backend})
         print(f"backend set to {args.backend!r}")
-    result = _installer(args.tui).install()
-    if isinstance(result, dict):
-        print(json.dumps(result, indent=2))
-    ok = bool(result) if isinstance(result, bool) else True
-    if ok and args.tui == "codex":
-        print("\nnote: trust the new hooks in Codex with /hooks before they run.")
+    ok = True
+    for tui in tuis:
+        installer = get_installer(tui, mcp=args.mcp)
+        try:
+            plans = installer.plans()
+        except Exception as exc:
+            print(f"[FAILED] {tui}: {exc}")
+            ok = False
+            continue
+        changed = [p for p in plans if p.changed]
+        if not changed:
+            print(f"[ok] {tui}: already installed ({', '.join(str(p.path) for p in plans)})")
+            continue
+        for plan in changed:
+            print(plan.diff() or f"(creates {plan.path})")
+        if not args.dry_run and not args.yes and not _confirm(f"Apply these changes for {tui}?"):
+            print(f"[skipped] {tui}: not confirmed (use --yes to apply non-interactively)")
+            ok = False
+            continue
+        result = installer.install(dry_run=args.dry_run, run_self_test=not args.no_self_test,
+                                   check_version=not args.ignore_version)
+        _print_result(result)
+        ok = ok and result.ok
     return 0 if ok else 1
 
 
 def cmd_uninstall(args: argparse.Namespace) -> int:
-    result = _installer(args.tui).uninstall()
-    if isinstance(result, dict):
-        print(json.dumps(result, indent=2))
+    from .installers import get_installer
+
+    tuis = _resolve_tuis(args)
+    if tuis is None:
+        return 2
+    ok = True
+    for tui in tuis:
+        result = get_installer(tui, mcp=True).uninstall(dry_run=args.dry_run)
+        _print_result(result)
+        ok = ok and result.ok
+    return 0 if ok else 1
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    from . import installers
+
+    names = installers.names() if not args.tuis else (_resolve_tuis(args) or [])
+    rows = [installers.get_installer(n, mcp=True).status() for n in names]
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+    width = max(len(r["tui"]) for r in rows) if rows else 10
+    for r in rows:
+        mark = "installed" if r["installed"] else "-"
+        if r.get("mcp_installed"):
+            mark += "+mcp"
+        found = r["detected"] or "not on PATH"
+        print(f"{r['tui']:<{width}}  {r['seam']:<6}  {mark:<13}  {found}")
     return 0
+
+
+def cmd_wrap(args: argparse.Namespace) -> int:
+    """Run a command; print its output trimmed by the policy; exit with its code.
+
+    For TUIs with no hook seam (Aider: ``test-cmd: subcortex wrap -- pytest -q``).
+    Output is captured (stdout+stderr merged, in order) and printed once the
+    command exits. Anything going wrong on our side prints the output as is.
+    """
+    argv = list(args.command or [])
+    if argv and argv[0] == "--":
+        argv = argv[1:]
+    if not argv:
+        print("usage: subcortex wrap -- <command> [args...]", file=sys.stderr)
+        return 2
+    try:
+        proc = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    except OSError as exc:
+        print(f"subcortex wrap: {exc}", file=sys.stderr)
+        return 127
+    output = proc.stdout.decode("utf-8", errors="replace")
+    text = output
+    if proc.returncode == 0:
+        try:
+            from . import policy
+            from .client import DaemonClient
+
+            cfg = load_config()
+            text = policy.trim_output(output, cfg, DaemonClient(cfg).judge,
+                                      tool="shell", tool_input={"command": " ".join(argv)}) or output
+        except Exception:
+            text = output
+    sys.stdout.write(text)
+    sys.stdout.flush()
+    return proc.returncode
 
 
 def cmd_mcp(args: argparse.Namespace) -> int:
@@ -296,20 +388,38 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor = sub.add_parser("doctor", help="check config, backend and daemon health")
     p_doctor.set_defaults(func=cmd_doctor)
 
-    p_hook = sub.add_parser("hook", help="TUI hook entry point (payload on stdin)")
-    p_hook.add_argument("tui", choices=["claude-code", "codex"])
-    p_hook.add_argument("event", help="hook event name, e.g. UserPromptSubmit")
-    p_hook.set_defaults(func=cmd_hook)
+    # `hook` is dispatched in main() before argparse runs (see there); this
+    # entry only documents it in --help.
+    sub.add_parser("hook", help="TUI hook entry point: subcortex hook <tui> [event] (payload on stdin)")
 
-    p_install = sub.add_parser("install", help="wire subcortex hooks into a TUI")
-    p_install.add_argument("--tui", required=True, choices=list(_TUIS))
-    p_install.add_argument("--backend", choices=["laya", "jev"], default=None,
+    for name, func, help_text in (
+        ("install", cmd_install, "wire subcortex into one or more TUIs"),
+        ("uninstall", cmd_uninstall, "remove subcortex from one or more TUIs"),
+    ):
+        p = sub.add_parser(name, help=help_text)
+        p.add_argument("tuis", nargs="*", metavar="TUI", help="TUI name(s), or 'all'")
+        p.add_argument("--tui", help=argparse.SUPPRESS)  # 0.1.0 spelling
+        p.add_argument("--dry-run", action="store_true", help="show the change, write nothing")
+        if name == "install":
+            p.add_argument("--backend", choices=["laya", "jev"], default=None,
                            help="decision backend (default: keep configured one)")
-    p_install.set_defaults(func=cmd_install)
+            p.add_argument("--yes", "-y", action="store_true", help="apply without asking")
+            p.add_argument("--no-self-test", action="store_true",
+                           help="skip running the hook commands before writing them")
+            p.add_argument("--ignore-version", action="store_true",
+                           help="install even if the detected TUI version is too old for its hooks")
+            p.add_argument("--mcp", action="store_true",
+                           help="also register the `subcortex mcp` server where the TUI supports it")
+        p.set_defaults(func=func)
 
-    p_uninstall = sub.add_parser("uninstall", help="remove subcortex hooks from a TUI")
-    p_uninstall.add_argument("--tui", required=True, choices=list(_TUIS))
-    p_uninstall.set_defaults(func=cmd_uninstall)
+    p_status = sub.add_parser("status", aliases=["tuis"], help="list supported TUIs and install state")
+    p_status.add_argument("tuis", nargs="*", metavar="TUI")
+    p_status.add_argument("--json", action="store_true")
+    p_status.set_defaults(func=cmd_status, tui=None)
+
+    p_wrap = sub.add_parser("wrap", help="run a command and trim its disposable output (for TUIs without hooks)")
+    p_wrap.add_argument("command", nargs=argparse.REMAINDER, help="-- <command> [args...]")
+    p_wrap.set_defaults(func=cmd_wrap)
 
     p_mcp = sub.add_parser("mcp", help="run the stdio MCP server")
     p_mcp.set_defaults(func=cmd_mcp)
@@ -318,6 +428,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[list] = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "hook":
+        # Hooks bypass argparse entirely: a usage error would exit 2, which
+        # several TUIs treat as "block this prompt". hook.main always returns 0.
+        from .hook import main as hook_main
+
+        return hook_main(argv[1:])
     args = build_parser().parse_args(argv)
     try:
         return int(args.func(args))

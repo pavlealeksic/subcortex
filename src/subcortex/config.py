@@ -12,7 +12,14 @@ Keys::
     thresholds prompt_simple_confidence  (0.8)
                output_needed_threshold   (0.3)
                min_output_chars          (6000)
+    features   prompt_hint, trim_output, compaction_snapshot  (all true)
+    hooks      budget_s (4.0)  hard wall-clock cap for one hook invocation
+               http_timeout_s (3.0), head_chars (1000), tail_chars (500),
+               snapshot_messages (5), snapshot_chars (500)
     jev        base_url, endpoint_path, api_key_env, model, timeout
+
+Runtime state lives in ``~/.local/share/subcortex`` (``SUBCORTEX_DATA_DIR``
+overrides; resolved at call time via ``data_dir()``).
 """
 
 from __future__ import annotations
@@ -43,6 +50,19 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "output_needed_threshold": 0.3,
         "min_output_chars": 6000,
     },
+    "features": {
+        "prompt_hint": True,
+        "trim_output": True,
+        "compaction_snapshot": True,
+    },
+    "hooks": {
+        "budget_s": 4.0,
+        "http_timeout_s": 3.0,
+        "head_chars": 1000,
+        "tail_chars": 500,
+        "snapshot_messages": 5,
+        "snapshot_chars": 500,
+    },
     "jev": {
         "base_url": "https://api.typesafe.ai/v1",
         "endpoint_path": "/systemone",
@@ -62,7 +82,14 @@ _ENV_OVERRIDES = {
     "SUBCORTEX_JEV_API_KEY_ENV": ("jev", "api_key_env", str),
     "SUBCORTEX_JEV_MODEL": ("jev", "model", str),
     "SUBCORTEX_JEV_TIMEOUT": ("jev", "timeout", float),
+    "SUBCORTEX_HOOK_BUDGET": ("hooks", "budget_s", float),
 }
+
+
+def data_dir() -> Path:
+    """Runtime state dir, resolved per call so tests can redirect HOME."""
+    override = os.environ.get("SUBCORTEX_DATA_DIR", "").strip()
+    return Path(override) if override else Path.home() / ".local" / "share" / "subcortex"
 
 
 def config_path() -> Path:
