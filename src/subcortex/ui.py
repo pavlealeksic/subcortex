@@ -198,7 +198,10 @@ class UI:
                      else "↑/↓ move · enter select · esc cancel")
         self.write(f"  {question}")
         self.dim(help_text)
-        lines = len(options)
+        visible = min(len(options), self._max_visible())
+        scrolling = visible < len(options)
+        lines = visible + (2 if scrolling else 0)  # constant height keeps redraws aligned
+        top = 0
         with self._raw_mode():
             self.stdout.write("\x1b[?25l")  # hide cursor
             try:
@@ -207,7 +210,13 @@ class UI:
                     if not first:
                         self.stdout.write(f"\x1b[{lines}A")
                     first = False
-                    for i, (_, label, hint) in enumerate(options):
+                    top = min(max(top, cursor - visible + 1), cursor)  # keep the cursor in view
+                    window = range(top, top + visible)
+                    if scrolling:
+                        more = f"↑ {top} more" if top else ""
+                        self.stdout.write(f"\x1b[2K    {self._c('2', more)}\n")
+                    for i in window:
+                        _, label, hint = options[i]
                         pointer = self._c("36", "❯") if i == cursor else " "
                         box = ""
                         if multi:
@@ -216,6 +225,10 @@ class UI:
                         if i == cursor:
                             text = self._c("1", label) + (self._c("2", f"  {hint}") if hint else "")
                         self.stdout.write(f"\x1b[2K  {pointer} {box}{text}\n")
+                    if scrolling:
+                        below = len(options) - top - visible
+                        more = f"↓ {below} more" if below else ""
+                        self.stdout.write(f"\x1b[2K    {self._c('2', more)}\n")
                     self.stdout.flush()
                     key = self._next_key()
                     if key == UP:
@@ -236,6 +249,13 @@ class UI:
             finally:
                 self.stdout.write("\x1b[?25h")
                 self.stdout.flush()
+
+    def _max_visible(self) -> int:
+        """Menu rows that fit the terminal (header, help and margins excluded)."""
+        import shutil
+
+        rows = shutil.get_terminal_size(fallback=(80, 24)).lines
+        return max(5, rows - 8)
 
     @contextmanager
     def _raw_mode(self) -> Iterator[None]:

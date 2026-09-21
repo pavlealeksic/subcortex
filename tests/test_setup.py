@@ -77,6 +77,16 @@ class TestKeyMode(unittest.TestCase):
         with self.assertRaises(Cancelled):
             key_ui([DOWN, CANCEL])[0].choose("pick", OPTIONS)
 
+    def test_long_menus_scroll(self):
+        many = [(i, f"item {i}", "") for i in range(30)]
+        ui, out = key_ui([DOWN] * 20 + [SPACE, ENTER])
+        with mock.patch.object(UI, "_max_visible", return_value=6):
+            self.assertEqual(ui.checklist("pick", many, set()), [20])
+        frames = out.getvalue()
+        self.assertIn("↓ 24 more", frames)  # first frame: rows 0-5 shown
+        self.assertIn("↑ 15 more", frames)  # after scrolling to row 20
+        self.assertNotIn("item 29", frames.split("\x1b[")[1])  # never drew the whole list at once
+
 
 class WizardCase(unittest.TestCase):
     def setUp(self):
