@@ -242,6 +242,12 @@ def _resolve_tuis(args: argparse.Namespace) -> Optional[list]:
         return None
     if requested == ["all"]:
         return installers.names()
+    if requested == ["detected"]:
+        found = [n for n in installers.names() if installers.get_installer(n).detected()]
+        if not found:
+            print("no supported TUI found on PATH (see: subcortex tuis)", file=sys.stderr)
+            return None
+        return found
     resolved = []
     for name in requested:
         key = installers.canonical_name(name)
@@ -420,7 +426,8 @@ def build_parser() -> argparse.ArgumentParser:
         ("uninstall", cmd_uninstall, "remove subcortex from one or more TUIs"),
     ):
         p = sub.add_parser(name, help=help_text)
-        p.add_argument("tuis", nargs="*", metavar="TUI", help="TUI name(s), or 'all'")
+        p.add_argument("tuis", nargs="*", metavar="TUI",
+                       help="TUI name(s), 'detected' (those on PATH) or 'all'")
         p.add_argument("--tui", help=argparse.SUPPRESS)  # 0.1.0 spelling
         p.add_argument("--dry-run", action="store_true", help="show the change, write nothing")
         if name == "install":

@@ -68,6 +68,7 @@ subcortex tuis                            # supported TUIs, what's installed, wh
 subcortex install claude-code --dry-run   # show exactly what would change
 subcortex install claude-code             # shows the diff, asks, self-tests, writes
 subcortex install codex gemini-cli --yes  # several at once, no prompt
+subcortex install detected                # every supported TUI found on PATH
 subcortex install cursor --mcp            # also register the on-demand MCP server
 subcortex uninstall claude-code           # removes exactly what subcortex added
 ```

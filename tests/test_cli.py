@@ -144,6 +144,14 @@ class TestTuiCommands(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertFalse(os.path.exists(self.tmp.name + "/.claude/settings.json"))
 
+    def test_detected_selects_tuis_on_path(self):
+        from subcortex import installers
+
+        with mock.patch("shutil.which", side_effect=lambda b: "/bin/x" if b in ("claude", "kimi") else None):
+            tuis = cli._resolve_tuis(cli.build_parser().parse_args(["install", "detected"]))
+        self.assertEqual(sorted(tuis), ["claude-code", "kimi-code"])
+        self.assertTrue(set(tuis) <= set(installers.names()))
+
     def test_unknown_tui(self):
         code, _, err = self.run_cli(["install", "nope", "--yes"])
         self.assertEqual(code, 2)
