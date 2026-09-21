@@ -43,4 +43,40 @@ Config lives at `~/.config/subcortex/config.json` (see `subcortex/config.py`
 for defaults); `SUBCORTEX_*` env vars override. Daemon logs, PID and lock live
 in `~/.local/share/subcortex/`.
 
-Full docs come in a later milestone.
+## TUI integration
+
+```sh
+subcortex install --tui claude-code --backend laya   # or: codex, opencode; --backend jev
+subcortex uninstall --tui claude-code
+```
+
+| Feature | Claude Code | Codex CLI | OpenCode |
+|---|---|---|---|
+| Simple-prompt hint | `UserPromptSubmit` → context | `UserPromptSubmit` → context | `chat.message` → synthetic part |
+| Disposable-output truncation | `PostToolUse` → `updatedToolOutput` | `PostToolUse` → replaced result | `tool.execute.after` → replaced output |
+| Compaction guard | `PreCompact` snapshot + `SessionStart(compact)` re-inject | same pattern | `experimental.session.compacting` note |
+
+Every hook fails open: if the daemon is down or slow, the TUI proceeds untouched.
+
+Per-TUI details: [docs/claude-code.md](docs/claude-code.md),
+[docs/codex.md](docs/codex.md), [docs/opencode.md](docs/opencode.md).
+Codex note: trust the hooks once with `/hooks` after install.
+
+## Any other TUI (MCP)
+
+```sh
+subcortex mcp   # stdio MCP server: subcortex_decide / classify_prompt / judge_output
+```
+
+Register it as an MCP server in any MCP-capable TUI (Gemini CLI, Crush, Amp, …).
+Writing a native hook adapter for a new TUI: [docs/adding-a-tui.md](docs/adding-a-tui.md).
+
+## Development
+
+```sh
+python3 -m unittest discover -s tests     # 117 tests, no model/API key needed
+```
+
+Releases publish to PyPI via Trusted Publishing (`.github/workflows/publish.yml`):
+bump `version` in `pyproject.toml`, then `gh release create v<X.Y.Z> --generate-notes`.
+

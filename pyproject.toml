@@ -21,3 +21,6 @@ subcortex = "subcortex.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+subcortex = ["adapters/opencode/*.ts"]

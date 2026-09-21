@@ -210,6 +210,62 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+_TUIS = ("claude-code", "codex", "opencode")
+
+
+def _installer(tui: str):
+    if tui == "claude-code":
+        from .installers import claude_code
+        return claude_code
+    if tui == "codex":
+        from .installers import codex
+        return codex
+    if tui == "opencode":
+        from .installers import opencode
+        return opencode
+    raise ValueError(f"unknown TUI {tui!r}")
+
+
+def cmd_hook(args: argparse.Namespace) -> int:
+    """TUI hook entry point: payload JSON on stdin, response JSON on stdout."""
+    if args.tui == "claude-code":
+        from .adapters import claude_code
+        return claude_code.main([args.event])
+    if args.tui == "codex":
+        from .adapters import codex
+        return codex.main([args.event])
+    print(f"no hook adapter for {args.tui!r} (OpenCode uses its TS plugin)",
+          file=sys.stderr)
+    return 0  # fail-open: never block a TUI on our mistakes
+
+
+def cmd_install(args: argparse.Namespace) -> int:
+    if args.backend:
+        from .config import save_config
+        save_config({"backend": args.backend})
+        print(f"backend set to {args.backend!r}")
+    result = _installer(args.tui).install()
+    if isinstance(result, dict):
+        print(json.dumps(result, indent=2))
+    ok = bool(result) if isinstance(result, bool) else True
+    if ok and args.tui == "codex":
+        print("\nnote: trust the new hooks in Codex with /hooks before they run.")
+    return 0 if ok else 1
+
+
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    result = _installer(args.tui).uninstall()
+    if isinstance(result, dict):
+        print(json.dumps(result, indent=2))
+    return 0
+
+
+def cmd_mcp(args: argparse.Namespace) -> int:
+    from . import mcp_server
+    mcp_server.serve()
+    return 0
+
+
 # -- parser -----------------------------------------------------------------------
 
 
@@ -239,6 +295,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_doctor = sub.add_parser("doctor", help="check config, backend and daemon health")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_hook = sub.add_parser("hook", help="TUI hook entry point (payload on stdin)")
+    p_hook.add_argument("tui", choices=["claude-code", "codex"])
+    p_hook.add_argument("event", help="hook event name, e.g. UserPromptSubmit")
+    p_hook.set_defaults(func=cmd_hook)
+
+    p_install = sub.add_parser("install", help="wire subcortex hooks into a TUI")
+    p_install.add_argument("--tui", required=True, choices=list(_TUIS))
+    p_install.add_argument("--backend", choices=["laya", "jev"], default=None,
+                           help="decision backend (default: keep configured one)")
+    p_install.set_defaults(func=cmd_install)
+
+    p_uninstall = sub.add_parser("uninstall", help="remove subcortex hooks from a TUI")
+    p_uninstall.add_argument("--tui", required=True, choices=list(_TUIS))
+    p_uninstall.set_defaults(func=cmd_uninstall)
+
+    p_mcp = sub.add_parser("mcp", help="run the stdio MCP server")
+    p_mcp.set_defaults(func=cmd_mcp)
 
     return parser
 

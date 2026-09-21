@@ -100,3 +100,20 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
         target = cfg[section] if section else cfg
         target[key] = value
     return cfg
+
+
+def save_config(updates: Dict[str, Any]) -> Path:
+    """Merge *updates* into config.json (preserving other keys) and return the path."""
+    path = config_path()
+    data: Dict[str, Any] = {}
+    try:
+        if path.is_file():
+            existing = json.loads(path.read_text())
+            if isinstance(existing, dict):
+                data = existing
+    except (OSError, ValueError):
+        pass
+    _merge(data, updates)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n")
+    return path
