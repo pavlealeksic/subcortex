@@ -102,6 +102,55 @@ class TestCli(CliFixture):
         self.assertIn("daemon not running", out)
 
 
+class TestEval(unittest.TestCase):
+    """`subcortex eval` must catch a model that would hint complex work or trim needed output."""
+
+    def run_eval(self, backend):
+        out = io.StringIO()
+        with mock.patch("subcortex.backends.get_backend", return_value=backend), \
+                mock.patch.dict(os.environ, {"SUBCORTEX_CONFIG": "/nonexistent/c.json"}), \
+                contextlib.redirect_stdout(out):
+            code = cli.main(["eval"])
+        return code, out.getvalue()
+
+    def test_a_reckless_model_fails(self):
+        from subcortex.verdicts import canned_answers
+
+        class Reckless:
+            name = "jev"
+
+            def available(self):
+                return True, "ok"
+
+            def predict(self, state, questions):
+                return canned_answers(questions, simple=True, disposable=True)
+        code, out = self.run_eval(Reckless())
+        self.assertEqual(code, 1)
+        self.assertIn("hinted a complex request", out)
+        self.assertIn("trimmed needed output", out)
+
+    def test_an_oracle_passes(self):
+        from subcortex import evalset
+        from subcortex.verdicts import canned_answers
+
+        simple = {p: s for p, s in evalset.PROMPTS + evalset.HELDOUT_PROMPTS}
+        needed = {(t, c): n for t, c, _, n in evalset.OUTPUTS + evalset.HELDOUT_OUTPUTS}
+
+        class Oracle:
+            name = "jev"
+
+            def available(self):
+                return True, "ok"
+
+            def predict(self, state, questions):
+                if "prompt" in state:
+                    return canned_answers(questions, simple=simple.get(state["prompt"], False))
+                return canned_answers(questions, disposable=not needed.get((state["task"], state["tool_call"]), True))
+        code, out = self.run_eval(Oracle())
+        self.assertEqual(code, 0, out)
+        self.assertIn("held out", out)
+
+
 class TestTuiCommands(unittest.TestCase):
     def setUp(self):
         import tempfile

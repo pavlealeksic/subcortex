@@ -21,7 +21,7 @@ BIG = "compiling module\\n".replace("\\n", "\n") * 800
 
 
 class StubBackend:
-    name = "stub"
+    name = "jev"  # a calibrated profile
 
     def predict(self, state, questions):
         from subcortex.verdicts import canned_answers

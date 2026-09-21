@@ -61,11 +61,16 @@ PROMPT_RULES: Dict[str, Rule] = {
     "laya": [("multi_step", True, 0.8), ("multi_file", True, 0.8)],
 }
 OUTPUT_RULES: Dict[str, Rule] = {
-    # evalset, jev-1.13.0: 12/12 disposable outputs trimmed, 0/12 needed ones.
+    # evalset, jev-1.13.0: 12/12 disposable outputs trimmed, 0/12 needed ones;
+    # held out: 6/6 and 0/6.
     "jev": [("routine", True, 0.4), ("needed", False, 0.3)],
-    # evalset, laya multilingual: 3/12 disposable, 0/12 needed.
+    # evalset, laya multilingual: 3/12 and 0/12 — but held out it trimmed 2/6
+    # NEEDED outputs (npm audit, git log). Opt-in only (see TRIMS_BY_DEFAULT).
     "laya": [("depends", False, 0.9), ("needed", False, 0.75)],
 }
+# Backends whose output rule held up on the held-out examples. The others only
+# trim when the user sets thresholds.output_needed_threshold explicitly.
+TRIMS_BY_DEFAULT = frozenset({"jev"})
 DEFAULT_PROFILE = "laya"  # the conservative rule, for backends nobody calibrated
 
 TASK_CHARS = 600
@@ -208,8 +213,12 @@ def judge_output(
         if not task or not task.strip():
             return {"needed": True, "p_needed": None, "reason": "no request to judge against"}
         be = backend or get_backend(cfg)
-        rule = _override(OUTPUT_RULES[_profile(be)],
-                         (cfg.get("thresholds") or {}).get("output_needed_threshold"))
+        profile = _profile(be)
+        override = (cfg.get("thresholds") or {}).get("output_needed_threshold")
+        if profile not in TRIMS_BY_DEFAULT and override is None:
+            return {"needed": True, "p_needed": None,
+                    "reason": f"{profile} does not trim by default (docs/calibration.md)"}
+        rule = _override(OUTPUT_RULES[profile], override)
         questions = {q: OUTPUT_QUESTIONS[q] for q, _, _ in rule}
         state = {"task": redact(task.strip())[:TASK_CHARS],
                  "tool_call": redact(str(context))[:TOOL_CALL_CHARS],

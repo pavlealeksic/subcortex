@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from . import __version__, daemon, localhttp
 from .backends import get_backend
@@ -213,6 +213,72 @@ def cmd_stats(args: argparse.Namespace) -> int:
     else:
         print(f"\n  daemon not running on 127.0.0.1:{cfg['port']} (it starts with the next hook)")
     return 0
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    """Run the labeled examples through the configured backend and rules.
+
+    A decision model's probabilities are not accuracies: this is how to know
+    what the thresholds do on *your* backend (docs/calibration.md). Exits 1 if
+    a complex request would be hinted or a needed output trimmed.
+    """
+    from . import evalset, verdicts
+    from .backends import get_backend
+    from .metrics import METRICS
+
+    cfg = load_config()
+    backend = get_backend(cfg, args.backend) if args.backend else get_backend(cfg)
+    available, why = backend.available()
+    if not available:
+        print(f"backend {backend.name!r} is not usable: {why}", file=sys.stderr)
+        return 1
+    profile = verdicts._profile(backend)
+    cost_before = METRICS.snapshot()["totals"].get("jev_cost_usd", 0.0)
+    started = time.perf_counter()
+    judged = json.loads(json.dumps(cfg))
+    judged["thresholds"]["min_output_chars"] = 0  # measure the decisions, not the size gate
+    mistakes: List[str] = []
+    errors = 0
+
+    def score(label: str, prompts: Any, outputs: Any) -> None:
+        nonlocal errors
+        hinted = {True: 0, False: 0}
+        for prompt, simple in prompts:
+            verdict = verdicts.classify_prompt(prompt, backend=backend, config=cfg)
+            if verdict is None:
+                errors += 1
+            elif verdict["label"] == "simple":
+                hinted[simple] += 1
+                if not simple:
+                    mistakes.append(f"{label}: hinted a complex request: {prompt!r} {verdict['signals']}")
+        trimmed = {True: 0, False: 0}
+        for task, call, output, needed in outputs:
+            verdict = verdicts.judge_output(output, call, backend=backend, config=judged, task=task)
+            if verdict is None:
+                errors += 1
+            elif verdict["needed"] is False:
+                trimmed[needed] += 1
+                if needed:
+                    mistakes.append(f"{label}: trimmed needed output of {call!r} for {task!r} {verdict['signals']}")
+        n_simple = sum(1 for _, s in prompts if s)
+        n_disposable = sum(1 for *_, n in outputs if not n)
+        print(f"  {label:12s} hints {hinted[True]}/{n_simple} simple, {hinted[False]}/{len(prompts) - n_simple} "
+              f"complex (must be 0) · trims {trimmed[False]}/{n_disposable} disposable, "
+              f"{trimmed[True]}/{len(outputs) - n_disposable} needed (must be 0)")
+
+    print(f"backend {backend.name} · rule {profile!r}"
+          + ("" if profile in verdicts.TRIMS_BY_DEFAULT or cfg["thresholds"].get("output_needed_threshold")
+             is not None else " · output trimming off by default for this backend"))
+    score("calibration", evalset.PROMPTS, evalset.OUTPUTS)
+    score("held out", evalset.HELDOUT_PROMPTS, evalset.HELDOUT_OUTPUTS)
+    print(f"  {time.perf_counter() - started:.1f}s", end="")
+    cost = METRICS.snapshot()["totals"].get("jev_cost_usd", 0.0) - cost_before
+    print(f" · jev cost ${cost:.5f}" if cost else "")
+    if errors:
+        print(f"  errors: {errors} decisions failed (they fail open: nothing changes)")
+    for mistake in mistakes:
+        print(f"  ✗ {mistake}")
+    return 1 if mistakes or errors else 0
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -659,6 +725,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_stats.add_argument("--days", type=float, default=None, help="only the last N days")
     p_stats.add_argument("--json", action="store_true", help="machine-readable output")
     p_stats.set_defaults(func=cmd_stats)
+
+    p_eval = sub.add_parser("eval", help="run the labeled examples through your backend and thresholds")
+    p_eval.add_argument("--backend", choices=["laya", "jev"], help="evaluate this backend instead")
+    p_eval.set_defaults(func=cmd_eval)
 
     p_doctor = sub.add_parser("doctor", help="check config, backend and daemon health")
     p_doctor.set_defaults(func=cmd_doctor)

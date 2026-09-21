@@ -21,7 +21,7 @@ from subcortex.config import DEFAULT_CONFIG
 class FakeBackend:
     """A sure model: every prompt simple, every output needed."""
 
-    name = "fake"
+    name = "jev"  # a calibrated profile
 
     def predict(self, state, questions):
         from subcortex.verdicts import canned_answers
@@ -145,7 +145,7 @@ class TestDaemon(unittest.TestCase):
 
 
 class StubPolicyBackend:
-    name = "stub"
+    name = "jev"  # a calibrated profile
 
     def predict(self, state, questions):
         from subcortex.verdicts import canned_answers

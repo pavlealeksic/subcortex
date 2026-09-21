@@ -34,7 +34,7 @@ TRIMMED = "[subcortex: truncated"
 
 
 class StubBackend:
-    name = "stub"
+    name = "jev"  # a calibrated profile
 
     def predict(self, state, questions):
         from subcortex.verdicts import canned_answers

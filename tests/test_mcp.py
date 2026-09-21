@@ -21,7 +21,7 @@ SRC = str(Path(__file__).resolve().parents[1] / "src")
 
 
 class StubBackend:
-    name = "stub"
+    name = "jev"  # a calibrated profile
 
     def predict(self, state, questions):
         from subcortex.verdicts import canned_answers

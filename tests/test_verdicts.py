@@ -100,14 +100,20 @@ class TestOutputRules(unittest.TestCase):
         self.assertTrue(judge(FakeBackend("jev", routine=0.9, needed=0.4))["needed"])  # veto
         self.assertTrue(judge(FakeBackend("jev", routine=0.5, needed=0.0))["needed"])
 
-    def test_laya_rule(self):
-        self.assertFalse(judge(FakeBackend("laya", depends=0.5, needed=0.5))["needed"])
-        self.assertTrue(judge(FakeBackend("laya", depends=0.95, needed=0.1))["needed"])
-        self.assertTrue(judge(FakeBackend("laya", depends=0.5, needed=0.8))["needed"])
+    def test_laya_does_not_trim_unless_the_user_opts_in(self):
+        # Held out, Laya trimmed needed outputs: no model call, output kept.
+        backend = FakeBackend("laya", depends=0.0, needed=0.0)
+        verdict = judge(backend)
+        self.assertTrue(verdict["needed"])
+        self.assertIn("does not trim by default", verdict["reason"])
+        self.assertEqual(backend.calls, [])
+        # An explicit threshold opts in to the (conservative) Laya rule.
+        self.assertFalse(judge(FakeBackend("laya", depends=0.5, needed=0.5), output_needed_threshold=0.9)["needed"])
+        self.assertTrue(judge(FakeBackend("laya", depends=0.5, needed=0.8), output_needed_threshold=0.9)["needed"])
 
     def test_user_threshold_overrides_the_primary_condition(self):
         backend = FakeBackend("laya", depends=0.95, needed=0.1)
-        self.assertTrue(judge(backend)["needed"])
+        self.assertTrue(judge(backend, output_needed_threshold=0.9)["needed"])
         self.assertFalse(judge(backend, output_needed_threshold=0.97)["needed"])
 
     def test_state_is_evidence_first_bounded_and_redacted(self):

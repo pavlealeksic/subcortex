@@ -298,7 +298,7 @@ class _StubBackend:
     """Deterministic backend for the self-test: every prompt is simple, every
     output disposable, so each hook path produces a response."""
 
-    name = "self-test"
+    name = "jev"  # behaves as a calibrated, trimming backend so every hook path responds
 
     def predict(self, state: Any, questions: Dict[str, Any]) -> Dict[str, Any]:
         from ..verdicts import canned_answers

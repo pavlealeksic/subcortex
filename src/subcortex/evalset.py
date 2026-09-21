@@ -8,6 +8,11 @@ PROMPTS: (prompt, simple) — simple = a lookup or a small, local edit.
 OUTPUTS: (task, tool call, output, needed) — needed = the output's middle holds
 details the task relies on. Failing commands are left out: subcortex never
 trims output that looks like a failure, whatever the model says.
+
+The questions and thresholds were chosen on PROMPTS/OUTPUTS. HELDOUT_* were
+written afterwards and never used for choosing anything — including requests
+that sound small but aren't ("fix the bug") and needed output that looks like
+noise — so they show whether a rule generalizes.
 """
 
 from __future__ import annotations
@@ -183,4 +188,54 @@ OUTPUTS: List[Tuple[str, str, str, bool]] = [
     ("why can't the app connect to the database?", "Bash: env", _ENV, True),
     ("debug the CORS error when posting orders", "Bash: curl -v -X OPTIONS https://api.example.com/v2/orders", _CURL, True),
     ("our worker gets slower over time, find the hotspot", "Bash: python -m cProfile worker.py", _PROFILE, True),
+]
+
+
+# -- held out ------------------------------------------------------------------------------
+
+HELDOUT_SIMPLE = [
+    "what's the capital of France?", "undo my last git commit but keep the changes",
+    "how do I exit vim?", "rename README.txt to README.md", "what does `ls -la` show?",
+    "remove the trailing whitespace on line 12 of app.py", "which python version is active?",
+    "is 1024 a power of two?", "add 'node_modules' to .dockerignore", "what port is postgres on by default?",
+    "change the page title in index.html to 'Dashboard'", "show the diff of my staged changes",
+]
+HELDOUT_COMPLEX = [
+    "just make the tests pass",                       # sounds small, is open-ended
+    "fix the bug",                                     # vague, needs investigation
+    "make it faster",                                  # vague optimisation
+    "add dark mode to the whole app",
+    "why does login fail only in production?",
+    "rename the User model to Account everywhere, including the database",
+    "migrate from REST to GraphQL for the mobile client",
+    "the CI is flaky, figure out which test and fix it",
+    "implement rate limiting per API key with Redis",
+    "clean up this codebase",
+    "add i18n support with French and German translations",
+    "our docker image is 2GB, get it under 300MB",
+]
+HELDOUT_PROMPTS: List[Tuple[str, bool]] = ([(p, True) for p in HELDOUT_SIMPLE]
+                                           + [(p, False) for p in HELDOUT_COMPLEX])
+
+HELDOUT_OUTPUTS: List[Tuple[str, str, str, bool]] = [
+    # disposable for the task
+    ("rename the prop `title` to `heading` in Card.tsx", "Bash: yarn install", _lines("[{i}/4] Fetching package-{i}@1.{j}.0 ...", 80) + "\nDone in 21.3s.", False),
+    ("update the README badge", "Bash: gradle build", _lines("> Task :module{i}:compileJava UP-TO-DATE", 90) + "\nBUILD SUCCESSFUL in 12s", False),
+    ("fix the typo in the footer", "Bash: docker compose up -d", _lines("Container app-svc{i}-1  Started", 70), False),
+    ("bump lodash to 4.17.21", "Bash: go mod download -x", _lines("# get https://proxy.golang.org/mod{i}/@v/v1.{j}.0.zip: 200 OK ({k}ms)", 60), False),
+    ("add a unit test for parse_date", "Bash: pip install -e .", _lines("Requirement already satisfied: lib{i}>=1.{j} in ./venv/lib/python3.12/site-packages", 70), False),
+    ("change the button color to blue", "Bash: npx tsc --noEmit", _lines("Checking src/components/C{i}.tsx", 90) + "\nDone.", False),
+    # needed for the task
+    ("why is the API slow on /orders?", "Bash: grep -c 'GET /orders' access.log && tail -n 80 access.log",
+     _lines("10.0.0.{i} - - [22/Sep/2026:10:{j:02d}:00] \"GET /orders?page={i} HTTP/1.1\" 200 512 rt={k}ms", 80), True),
+    ("which of our dependencies have known vulnerabilities?", "Bash: npm audit",
+     _lines("# npm audit report\n\npackage-{i}  <1.{j}.0\nSeverity: high\nPrototype Pollution - https://github.com/advisories/GHSA-{k}\nfix available via `npm audit fix`", 12), True),
+    ("find all TODOs about authentication", "Bash: rg -n TODO src",
+     _lines("src/mod{i}.py:{j}: # TODO: tidy imports", 40) + "\nsrc/auth/session.py:88: # TODO: rotate refresh tokens\nsrc/auth/oauth.py:41: # TODO: validate state param\n" + _lines("src/ui{i}.ts:{j}: // TODO: styles", 40), True),
+    ("what changed in the last release?", "Bash: git log --stat v1.4.0..v1.5.0",
+     _lines("commit {k:07x}\n    feat(billing): proration for plan changes #{i}\n src/billing/proration.py | {j} +++---", 20), True),
+    ("is the disk full on the build server?", "Bash: df -h",
+     "Filesystem Size Used Avail Use% Mounted on\n" + _lines("/dev/disk{i} 100G {j}G {k}G {j}% /mnt/vol{i}", 60), True),
+    ("which process is holding port 8080?", "Bash: lsof -i -P",
+     _lines("proc{i} {k} user {i}u IPv4 0x{j:x} 0t0 TCP *:{k} (LISTEN)", 60) + "\njava 4242 user 7u IPv4 0xabc 0t0 TCP *:8080 (LISTEN)\n" + _lines("proc{i} {k} user {i}u IPv4 0x{j:x} 0t0 TCP *:{j} (LISTEN)", 30), True),
 ]
