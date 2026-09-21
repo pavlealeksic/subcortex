@@ -38,6 +38,7 @@ ALIASES: Dict[str, str] = {
     "augment": "auggie",
     "kiro-cli": "kiro",
     "cline-cli": "cline",
+    "pi-coding-agent": "pi",
 }
 
 

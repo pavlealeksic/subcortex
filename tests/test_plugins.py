@@ -96,6 +96,55 @@ console.log(JSON.stringify(out))
 """
 
 
+PI_DRIVER = r"""
+import plugin from "./plugin.ts"
+const handlers: Record<string, Function> = {}
+plugin({ on: (name: string, fn: Function) => (handlers[name] = fn) })
+const ctx = { sessionManager: { getSessionId: () => "pi-1" }, signal: undefined }
+const out: any = { events: Object.keys(handlers).sort() }
+out.hint = await handlers.before_agent_start({ prompt: "what is 2+2?" }, ctx)
+const notice = "\n\n[Showing lines 1-2000 of 9000. Full output: /tmp/pi-bash-1.log]"
+out.trim = await handlers.tool_result({ toolName: "bash", isError: false, input: { command: "make" },
+  content: [{ type: "text", text: BIG_TEXT + notice }], details: { truncation: { truncated: true } } }, ctx)
+out.error_untouched = await handlers.tool_result({ toolName: "bash", isError: true,
+  content: [{ type: "text", text: BIG_TEXT }] }, ctx)
+out.read_untouched = await handlers.tool_result({ toolName: "read", isError: false,
+  content: [{ type: "text", text: BIG_TEXT }] }, ctx)
+out.compact = await handlers.session_before_compact({ preparation: { messagesToSummarize: [
+  { role: "user", content: [{ type: "text", text: "remember PELICAN-42" }] },
+  { role: "assistant", content: [{ type: "text", text: "Noted." }] }], turnPrefixMessages: [] } }, ctx)
+const ts = "2026-09-21T10:00:00.000Z"
+await handlers.session_compact({ compactionEntry: { timestamp: ts } }, ctx)
+const context = handlers.context({ messages: [{ role: "compactionSummary", summary: "S", timestamp: Date.parse(ts) },
+  { role: "user", content: "next" }] }, ctx)
+out.restored = context?.messages?.[1]
+out.garbage = [await handlers.before_agent_start(null, null), handlers.context(null, null),
+  await handlers.tool_result(undefined, undefined)]
+console.log(JSON.stringify(out))
+"""
+
+CLINE_DRIVER = r"""
+import plugin from "./plugin.ts"
+const out: any = { name: plugin.name, hooks: Object.keys(plugin.hooks).sort() }
+const user = { id: "u1", role: "user", content: [{ type: "text", text: '<user_input mode="act">what is 2+2?</user_input>' }] }
+const snap = { conversationId: "c1", agentId: "a1", parentAgentId: null,
+  messages: [user, { role: "assistant", content: [{ type: "text", text: "It is 4, PELICAN-42." }] }] }
+const r1 = await plugin.hooks.beforeModel({ snapshot: snap, request: { messages: [user], tools: [] } })
+out.hint = r1?.messages?.[0]?.content?.at(-1)?.text
+const summary = { id: "s", role: "user", content: [{ type: "text", text: "Context summary:\n\nX" }],
+  metadata: { kind: "compaction_summary", displayRole: "system", generatedAt: 123, tokensBefore: 9 } }
+const r2 = await plugin.hooks.beforeModel({ snapshot: snap, request: { messages: [summary, user], tools: [] } })
+out.restored = r2?.messages?.[0]?.content?.at(-1)?.text
+const r3 = await plugin.hooks.afterTool({ toolCall: { toolName: "run_commands" }, result: { output: [
+  { query: "make", result: BIG_TEXT, success: true },
+  { query: "false", result: BIG_TEXT, error: "Command exited with code 1", success: false }] } })
+out.trimmed = r3?.result?.output?.[0]?.result
+out.failed_untouched = r3?.result?.output?.[1]?.result === BIG_TEXT
+out.garbage = [await plugin.hooks.beforeModel(undefined), await plugin.hooks.afterTool(null)]
+console.log(JSON.stringify(out))
+"""
+
+
 @unittest.skipUnless(BUN, "bun is not installed")
 class PluginCase(unittest.TestCase):
     @classmethod
@@ -159,6 +208,70 @@ class TestAmpPlugin(PluginCase):
         self.assertIsNone(out.get("error_untouched"))
         self.assertIsNone(out.get("end"))
         self.assertIn("user: fix login", out["after_compaction"]["message"]["content"])
+
+
+class TestPiPlugin(PluginCase):
+    def test_hooks_against_the_daemon(self):
+        out = self.run_plugin("pi", PI_DRIVER)
+        self.assertEqual(out["events"], ["before_agent_start", "context", "session_before_compact",
+                                         "session_compact", "session_shutdown", "tool_result"])
+        self.assertEqual(out["hint"]["message"]["display"], False)
+        self.assertIn("simple", out["hint"]["message"]["content"])
+        text = out["trim"]["content"][0]["text"]
+        self.assertIn("[subcortex: truncated", text)
+        self.assertTrue(text.endswith("Full output: /tmp/pi-bash-1.log]"))  # Pi's pointer survives
+        self.assertIsNone(out.get("error_untouched"))
+        self.assertIsNone(out.get("read_untouched"))
+        self.assertIsNone(out.get("compact"))  # never {cancel} / {compaction}
+        self.assertEqual(out["restored"]["customType"], "subcortex-restore")
+        self.assertIn("PELICAN-42", out["restored"]["content"])
+        self.assertEqual(out["garbage"], [None, None, None])
+
+
+class TestClinePlugin(PluginCase):
+    def test_hooks_against_the_daemon(self):
+        out = self.run_plugin("cline", CLINE_DRIVER)
+        self.assertEqual((out["name"], out["hooks"]), ("subcortex", ["afterTool", "beforeModel"]))
+        self.assertIn("simple", out["hint"])
+        self.assertIn("PELICAN-42", out["restored"])
+        self.assertIn("[subcortex: truncated", out["trimmed"])
+        self.assertTrue(out["failed_untouched"])
+        self.assertEqual(out["garbage"], [None, None])
+
+    def test_hung_daemon_resolves_inside_clines_3s_limit(self):
+        import socket
+        import time
+
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(16)  # accepts, never answers
+        work = Path(tempfile.mkdtemp(dir=self.tmp.name))
+        url = f"http://127.0.0.1:{listener.getsockname()[1]}"
+        (work / "plugin.ts").write_text(bundled_plugin("cline", "subcortex.ts").replace("__SUBCORTEX_URL__", url))
+        (work / "driver.ts").write_text(r"""
+import plugin from "./plugin.ts"
+const user = { role: "user", content: [{ type: "text", text: "a brand new prompt" }] }
+const t0 = Date.now()
+const a = await plugin.hooks.beforeModel({ snapshot: { conversationId: "h", parentAgentId: null, messages: [user] },
+  request: { messages: [user] } })
+const t1 = Date.now()
+const b = await plugin.hooks.afterTool({ toolCall: { toolName: "run_commands" },
+  result: { output: [{ query: "q", result: "z".repeat(5000), success: true }] } })
+console.log(JSON.stringify({ a: a ?? null, b: b ?? null, first: t1 - t0, second: Date.now() - t1 }))
+""")
+        try:
+            import os
+            env = {k: v for k, v in os.environ.items() if k != "SUBCORTEX_URL"}
+            started = time.time()
+            proc = subprocess.run([BUN, "run", "driver.ts"], cwd=work, capture_output=True, text=True,
+                                  timeout=30, env=env)
+        finally:
+            listener.close()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        out = json.loads(proc.stdout.strip().splitlines()[-1])
+        self.assertEqual((out["a"], out["b"]), (None, None))
+        self.assertLess(out["first"], 2600)
+        self.assertLess(out["second"], 2600)
 
 
 if __name__ == "__main__":

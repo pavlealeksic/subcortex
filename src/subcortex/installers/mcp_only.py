@@ -47,23 +47,19 @@ class AuggieInstaller(_McpInstaller):
         return Path.home() / ".augment" / "settings.json"
 
 
-class ClineInstaller(_McpInstaller):
-    name = "cline"
-    display_name = "Cline CLI"
-    binaries = ("cline",)
-    docs = "https://docs.cline.bot/mcp/configuring-mcp-servers"
-    extra = {"type": "stdio"}
+def cline_mcp_path() -> Path:
+    explicit = os.environ.get("CLINE_MCP_SETTINGS_PATH", "").strip()
+    if explicit:
+        return Path(explicit)
+    data = os.environ.get("CLINE_DATA_DIR", "").strip()
+    if data:
+        return Path(data) / "settings" / "cline_mcp_settings.json"
+    return cline_dir() / "data" / "settings" / "cline_mcp_settings.json"
 
-    def mcp_path(self) -> Path:
-        explicit = os.environ.get("CLINE_MCP_SETTINGS_PATH", "").strip()
-        if explicit:
-            return Path(explicit)
-        data = os.environ.get("CLINE_DATA_DIR", "").strip()
-        if data:
-            return Path(data) / "settings" / "cline_mcp_settings.json"
-        base = os.environ.get("CLINE_DIR", "").strip()
-        root = Path(base) if base else Path.home() / ".cline"
-        return root / "data" / "settings" / "cline_mcp_settings.json"
+
+def cline_dir() -> Path:
+    base = os.environ.get("CLINE_DIR", "").strip()
+    return Path(base) if base else Path.home() / ".cline"
 
 
 class KiroInstaller(_McpInstaller):

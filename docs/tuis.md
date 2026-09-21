@@ -163,6 +163,24 @@ release as of 2026-09-21. Every hook command has the form
   first visible message changes — the snapshot then rides the next prompt.
 - Reload plugins (Ctrl+O → `plugins: reload`); `amp -x` needs `--plugin-ready-timeout`.
 
+### Pi — `pi` (≥ 0.87)
+- **Writes** `~/.pi/agent/extensions/subcortex.ts` (`$PI_CODING_AGENT_DIR`).
+  `before_agent_start` adds a hidden hint message; `tool_result` trims
+  successful `bash`/`powershell` output (keeping Pi's `Full output: <path>`
+  pointer); `session_before_compact` snapshots what's about to be summarized
+  and the `context` hook re-inserts it after that summary on every request.
+- A Pi extension that fails to load stops `pi` from starting, so the file has
+  only type imports and every handler catches everything.
+
+### Cline CLI — `cline` (≥ 3.0.62)
+- **Writes** `~/.cline/plugins/subcortex.ts` (`$CLINE_DIR`); `--mcp` also
+  registers the MCP server in `cline_mcp_settings.json`.
+- `beforeModel` appends the hint to the prompt (request-only) and, when a new
+  compaction summary appears, snapshots/restores into it; `afterTool` trims
+  successful `run_commands` entries.
+- Cline fails the whole run if a plugin hook errors or takes over 3 s, so
+  every hook races a 2.3 s deadline and resolves to "no change" on anything unexpected.
+
 ## MCP only
 
 ### Crush — `crush`, Goose — `goose`
@@ -172,13 +190,13 @@ release as of 2026-09-21. Every hook command has the form
   `extensions.subcortex` in Goose's `config.yaml` (inserted line-wise between
   marker comments, validated with PyYAML when available).
 
-### Warp — `warp`, Zed — `zed`, Kiro CLI — `kiro`, Cline CLI — `cline`, Auggie — `auggie`
+### Warp — `warp`, Zed — `zed`, Kiro CLI — `kiro`, Auggie — `auggie`
 - No hooks that can inject anything; subcortex registers its MCP server:
   `~/.warp/.mcp.json` · Zed's `global_settings.json` (its `settings.json` is
   JSONC; `global_settings.json` is merged beneath it and never written by Zed) ·
   `~/.kiro/settings/mcp.json` (Kiro's default engine only takes hooks inside
   agent files, and the opt-in engine injects noise on every prompt) ·
-  `~/.cline/data/settings/cline_mcp_settings.json` · `~/.augment/settings.json`.
+  `~/.augment/settings.json`.
 
 ### Continue CLI (`cn`), Rovo Dev CLI — manual
 - Continue: add to the `mcpServers` list in `~/.continue/config.yaml` (don't

@@ -33,13 +33,14 @@ _INSTALLERS: Dict[str, str] = {
     "opencode": "opencode:OpenCodeInstaller",
     "kilo": "opencode:KiloInstaller",
     "amp": "amp:AmpInstaller",
+    "pi": "pi_cline:PiInstaller",
+    "cline": "pi_cline:ClineInstaller",
     # MCP only
     "crush": "crush:CrushInstaller",
     "goose": "goose:GooseInstaller",
     "warp": "mcp_only:WarpInstaller",
     "zed": "mcp_only:ZedInstaller",
     "auggie": "mcp_only:AuggieInstaller",
-    "cline": "mcp_only:ClineInstaller",
     "kiro": "mcp_only:KiroInstaller",
 }
 

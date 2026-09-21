@@ -3,7 +3,7 @@
 A local decision layer for coding-agent TUIs. A small daemon keeps a
 typed-decision model warm and answers System-1 questions — *is this prompt
 simple? is this tool output disposable?* — in milliseconds, so the big model
-doesn't spend tokens on them. Hooks, plugins and MCP wire it into 28 terminal
+doesn't spend tokens on them. Hooks, plugins and MCP wire it into 29 terminal
 coding agents.
 
 Two decision backends:
@@ -50,7 +50,9 @@ Each TUI gets whichever of these its extension seam can safely support:
 | OpenCode ≥ 1.1.62 | plugin | ✅ | ✅ bash only | ✅ into the compaction prompt |
 | Kilo Code CLI | plugin | ✅ | ✅ | ✅ |
 | Amp | plugin | ✅ | ✅ | ✅ rolling snapshot |
-| Crush, Goose, Warp, Zed, Kiro, Cline, Auggie | MCP | on-demand tools | — | — |
+| Pi ≥ 0.87 | plugin | ✅ | ✅ | ✅ re-inserted after the summary |
+| Cline CLI ≥ 3.0.62 | plugin | ✅ | ✅ | ✅ on the next request |
+| Crush, Goose, Warp, Zed, Kiro, Auggie | MCP | on-demand tools | — | — |
 | Aider | none | — | `subcortex wrap` for test/lint | — |
 
 "—" means the TUI has no seam that can do it without blocking or failing a
