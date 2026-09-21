@@ -29,7 +29,7 @@ from subcortex.config import DEFAULT_CONFIG  # noqa: E402
 from subcortex.daemon import create_server  # noqa: E402
 
 E2E = os.environ.get("SUBCORTEX_E2E") == "1"
-HINT = "[subcortex] A local classifier rated this request as simple"
+HINT = "[subcortex] A decision model rated this request as simple"
 TRIMMED = "[subcortex: truncated"
 
 
@@ -53,8 +53,11 @@ class E2ECase(unittest.TestCase):
         (self.root / "work").mkdir()
         config = self.root / "subcortex.json"
         config.write_text("{}")
+        token = "e2e" + "0" * 61
+        (self.root / "data").mkdir(mode=0o700)
+        (self.root / "data" / "token").write_text(token)  # what the sandboxed hooks and plugins read
         self.daemon = create_server(0, copy.deepcopy(DEFAULT_CONFIG),
-                                    backend_factory=lambda c, name=None: StubBackend())
+                                    backend_factory=lambda c, name=None: StubBackend(), token=token)
         threading.Thread(target=self.daemon.serve_forever, daemon=True).start()
         self.subcortex_env = {"SUBCORTEX_CONFIG": str(config), "SUBCORTEX_DATA_DIR": str(self.root / "data"),
                               "SUBCORTEX_AUTOSTART": "0",
