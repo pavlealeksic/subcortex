@@ -23,7 +23,10 @@ class GrokBuildInstaller(Installer):
     docs = "https://x.ai/cli"
     supports_mcp = True
     post_install = "start a new grok session (or /hooks → r) to load the hooks"
-    EVENTS = {"PostToolUse": ("Bash|bash", 10), "PreCompact": (None, 10), "PostCompact": (None, 5)}
+    # UserPromptSubmit output is discarded by Grok; the hook only records the
+    # request, which the output judge needs as evidence.
+    EVENTS = {"UserPromptSubmit": (None, 5), "PostToolUse": ("Bash|bash", 10),
+              "PreCompact": (None, 10), "PostCompact": (None, 5)}
 
     def _content(self) -> str:
         hooks: Dict[str, Any] = {}
@@ -48,6 +51,9 @@ class GrokBuildInstaller(Installer):
     def sample_payload(self, event: str) -> Dict[str, Any]:
         common = {"hookEventName": event.lower(), "sessionId": SESSION, "cwd": "/tmp", "workspaceRoot": "/tmp",
                   "transcriptPath": "{transcript}", "permissionMode": "default", "hook_event_name": event}
+        if event == "UserPromptSubmit":
+            return {**common, "hookEventName": "user_prompt_submit", "promptId": "p1",
+                    "prompt": "why does make build take so long?"}
         if event == "PostToolUse":
             return {**common, "toolName": "run_terminal_command", "toolUseId": "call_1",
                     "toolInput": {"command": "make build"}, "toolInputTruncated": False,

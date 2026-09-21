@@ -235,6 +235,7 @@ class TestRealTerminal(unittest.TestCase):
                 ("Check the key", "n\r"),
                 ("What should subcortex do?", "\r"),
                 ("Wire subcortex into which TUIs?", "aa \r"),   # all on, all off, first on
+                ("Also register the on-demand MCP tools", "\r"),  # only if that TUI has MCP too
                 ("Show the full diffs?", "\r"),
                 ("Apply these changes?", "\r"),
                 ("Start (or restart) the daemon now?", "n\r"),
@@ -245,9 +246,12 @@ class TestRealTerminal(unittest.TestCase):
                 os.execvpe(sys.executable, [sys.executable, "-m", "subcortex", "setup", "--no-service"], env)
             out = b""
             try:
-                for fragment, keys in script:
+                optional = {"Also register the on-demand MCP tools"}
+                for i, (fragment, keys) in enumerate(script):
+                    # an optional question may be skipped: stop waiting once the next one shows
+                    wanted = [fragment] + ([script[i + 1][0]] if fragment in optional else [])
                     deadline = time.time() + 60
-                    while fragment.encode() not in out and time.time() < deadline:
+                    while not any(w.encode() in out for w in wanted) and time.time() < deadline:
                         if select.select([fd], [], [], 0.2)[0]:
                             try:
                                 chunk = os.read(fd, 65536)
@@ -256,6 +260,8 @@ class TestRealTerminal(unittest.TestCase):
                             if not chunk:
                                 break
                             out += chunk
+                    if fragment in optional and fragment.encode() not in out:
+                        continue
                     self.assertIn(fragment.encode(), out, _clean(out)[-2000:])
                     time.sleep(0.2)
                     if keys:

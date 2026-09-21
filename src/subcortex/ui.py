@@ -196,13 +196,15 @@ class UI:
               selected: Set[int]) -> int:
         help_text = ("↑/↓ move · space toggle · a all · enter accept · esc cancel" if multi
                      else "↑/↓ move · enter select · esc cancel")
-        self.write(f"  {question}")
-        self.dim(help_text)
         visible = min(len(options), self._max_visible())
         scrolling = visible < len(options)
         lines = visible + (2 if scrolling else 0)  # constant height keeps redraws aligned
         top = 0
+        # cbreak before the question is shown: keys typed as soon as it appears
+        # must reach the menu, not get echoed and line-buffered by the terminal.
         with self._raw_mode():
+            self.write(f"  {question}")
+            self.dim(help_text)
             self.stdout.write("\x1b[?25l")  # hide cursor
             try:
                 first = True
@@ -272,7 +274,8 @@ class UI:
             yield
             return
         try:
-            tty.setcbreak(fd)
+            # TCSADRAIN, not setcbreak's default TCSAFLUSH: that discards type-ahead.
+            tty.setcbreak(fd, termios.TCSADRAIN)
             yield
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, saved)

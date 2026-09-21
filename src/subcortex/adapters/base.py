@@ -14,7 +14,6 @@ override only what differs.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 PROMPT = "prompt"
@@ -45,22 +44,38 @@ BLOCKING_VALUES: Tuple[Tuple[str, Any], ...] = (
 )
 
 
-@dataclass
 class HookEvent:
-    kind: str
-    name: str
-    payload: Dict[str, Any]
-    session_id: str = ""
-    prompt: str = ""
-    tool: str = ""
-    tool_input: Any = None
-    output: Optional[str] = None
-    failed: bool = False
-    transcript_path: str = ""
-    source: str = ""
-    trigger: str = ""
-    messages: Optional[List[Dict[str, str]]] = None
-    extra: Dict[str, Any] = field(default_factory=dict)
+    """One hook event, normalized. A plain class on purpose: importing
+    ``dataclasses`` costs ~3 ms in every (cold-started) hook process."""
+
+    def __init__(self, kind: str, name: str, payload: Dict[str, Any], session_id: str = "",
+                 prompt: str = "", tool: str = "", tool_input: Any = None,
+                 output: Optional[str] = None, failed: bool = False, transcript_path: str = "",
+                 source: str = "", trigger: str = "",
+                 messages: Optional[List[Dict[str, str]]] = None,
+                 extra: Optional[Dict[str, Any]] = None) -> None:
+        self.kind = kind
+        self.name = name
+        self.payload = payload
+        self.session_id = session_id
+        self.prompt = prompt
+        self.tool = tool
+        self.tool_input = tool_input
+        self.output = output
+        self.failed = failed
+        self.transcript_path = transcript_path
+        self.source = source
+        self.trigger = trigger
+        self.messages = messages
+        self.extra = {} if extra is None else extra
+        # Set by the runner: commit callables to run once the response is delivered.
+        self.commits: Optional[List[Any]] = None
+
+    def __eq__(self, other: Any) -> bool:
+        return isinstance(other, HookEvent) and vars(self) == vars(other)
+
+    def __repr__(self) -> str:
+        return f"HookEvent({vars(self)!r})"
 
 
 def text_of(value: Any) -> Optional[str]:
@@ -111,6 +126,8 @@ class HookAdapter:
     # Deliver the compaction snapshot with the first prompt after compaction
     # (for TUIs whose session-start/post-compact hooks can't inject context).
     restore_on_prompt: bool = False
+    # False when the TUI discards prompt-hook output: the hint isn't computed.
+    delivers_hints: bool = True
 
     # -- event resolution -----------------------------------------------------------
 
@@ -157,7 +174,13 @@ class HookAdapter:
             return None
         from .. import policy
 
-        return policy.restore_snapshot(event.session_id, cfg, require_ready=True)
+        return policy.restore_snapshot(event.session_id, cfg, require_ready=True, tui=self.name,
+                                       commits=event.commits)
+
+    def output_context(self, event: HookEvent, cfg: Dict[str, Any]) -> Optional[str]:
+        """Context to deliver alongside a tool result (after the trim decision).
+        None by default; for TUIs whose only model-visible channel is a tool result."""
+        return None
 
     # -- rendering (None = no output = pass-through) ---------------------------------
 

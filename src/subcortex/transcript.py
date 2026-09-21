@@ -21,10 +21,20 @@ _USER_ROLES = {"user", "human"}
 _ASSISTANT_ROLES = {"assistant", "model", "gemini", "ai", "agent"}
 _TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
 # Harness-injected pseudo-messages such as <environment_context>…
-_INJECTED_RE = re.compile(r"^\s*<[a-z][\w-]*(\s[^>]*)?>", re.IGNORECASE)
+_INJECTED_RE = re.compile(r"<[a-z][\w-]*(?:\s[^>]*)?>", re.IGNORECASE)  # matched on stripped text
 _INJECTED_PREFIXES = ("# AGENTS.md instructions",)  # Codex
 # ...except wrappers around the user's own words (Cursor: <user_query>).
-_USER_WRAPPER_RE = re.compile(r"^\s*<(user_query|user_message)>\s*(.*?)\s*</\1>\s*$", re.S)
+_USER_WRAPPERS = ("user_query", "user_message")
+
+
+def _unwrap_user(text: str) -> Optional[str]:
+    """The words inside <user_query>…</user_query>, else None. Plain string
+    operations: a regex here backtracked cubically on long whitespace runs."""
+    for tag in _USER_WRAPPERS:
+        opening, closing = f"<{tag}>", f"</{tag}>"
+        if text.startswith(opening) and text.endswith(closing) and len(text) >= len(opening) + len(closing):
+            return text[len(opening):len(text) - len(closing)].strip()
+    return None
 
 
 def _role(value: Any) -> Optional[str]:
@@ -82,9 +92,9 @@ def message_from_entry(entry: Any) -> Optional[Dict[str, str]]:
         if not text and isinstance(message, str):
             text = message
     text = text.strip()
-    wrapped = _USER_WRAPPER_RE.match(text)
-    if wrapped:
-        text = wrapped.group(2).strip()
+    wrapped = _unwrap_user(text)
+    if wrapped is not None:
+        text = wrapped
     elif _INJECTED_RE.match(text) or text.startswith(_INJECTED_PREFIXES):
         return None
     if role is None or not text:

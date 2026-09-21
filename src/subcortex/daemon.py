@@ -11,8 +11,9 @@ Endpoints:
 Policy endpoints — the four behaviors from ``subcortex.policy``, for plugin-based
 TUIs (OpenCode, Amp, ...) so no plugin re-implements thresholds or heuristics:
 
-- ``POST /v1/prompt-hint``  ``{prompt}``                          → ``{success, hint|null}``
-- ``POST /v1/tool-output``  ``{output, tool?, input?, failed?}``  → ``{success, replacement|null}``
+- ``POST /v1/prompt-hint``  ``{prompt, session_id?}``             → ``{success, hint|null}``
+- ``POST /v1/tool-output``  ``{output, tool?, input?, failed?, session_id?, task?}``
+                                                                  → ``{success, replacement|null}``
 - ``POST /v1/snapshot``     ``{session_id, messages, trigger?}``  → ``{success, saved}``
 - ``POST /v1/restore``      ``{session_id}``                      → ``{success, context|null}``
 
@@ -35,7 +36,7 @@ from typing import Any, Callable, Dict, Optional
 
 from .backends import get_backend
 from .backends.base import DecisionBackend
-from .config import DATA_DIR, LOCK_PATH, LOG_PATH, PID_PATH, load_config
+from .config import data_dir, load_config, lock_path, log_path, pid_path
 from .metrics import METRICS
 from . import __version__, policy, verdicts
 
@@ -53,6 +54,10 @@ def _daemon_backend(state: Any, override: Optional[str] = None) -> DecisionBacke
 
 def make_handler(state: Any):
     class Handler(BaseHTTPRequestHandler):
+        # Socket reads/writes only (not model time): a client that connects and
+        # stalls must not pin a thread forever.
+        timeout = 15
+
         def _log(self, msg: str) -> None:
             log_path = getattr(self.server, "log_path", None)
             if not log_path:
@@ -83,7 +88,7 @@ def make_handler(state: Any):
                 return None
             try:
                 data = json.loads(self.rfile.read(length))
-            except ValueError:
+            except (ValueError, RecursionError, OSError):  # garbage, pathological nesting, stalled client
                 return None
             return data if isinstance(data, dict) else None
 
@@ -161,6 +166,7 @@ def make_handler(state: Any):
                     context=str(payload.get("context", "")),
                     backend=backend,
                     config=state.config,
+                    task=str(payload.get("task") or ""),
                 )
             except Exception as exc:
                 self._log(f"verdict/output failed: {exc}")
@@ -176,10 +182,14 @@ def make_handler(state: Any):
                 self._send_json(400, {"success": False, "error": "need a JSON object"})
                 return
             cfg = state.config
+            # Plugins name their TUI so sessions of different TUIs never share state.
+            tui = str(payload.get("tui") or "plugin")
+            sid = payload.get("session_id")
             try:
                 if route in ("prompt-hint", "tool-output"):
                     backend = _daemon_backend(state, payload.get("backend"))
                 if route == "prompt-hint":
+                    policy.remember_prompt(sid, payload.get("prompt"), tui=tui)
                     hint = policy.prompt_hint(
                         payload.get("prompt"), cfg,
                         lambda p: verdicts.classify_prompt(p, backend=backend, config=cfg))
@@ -188,20 +198,22 @@ def make_handler(state: Any):
                 elif route == "tool-output":
                     replacement = policy.trim_output(
                         payload.get("output"), cfg,
-                        lambda o, c: verdicts.judge_output(o, context=c, backend=backend, config=cfg),
+                        lambda o, c, t: verdicts.judge_output(o, context=c, backend=backend,
+                                                              config=cfg, task=t),
                         tool=str(payload.get("tool") or ""),
                         tool_input=payload.get("input"),
-                        failed=bool(payload.get("failed")))
+                        failed=bool(payload.get("failed")),
+                        task=str(payload.get("task") or policy.last_prompt(sid, tui=tui)))
                     METRICS.record("output_trimmed" if replacement else "output_kept")
                     result = {"replacement": replacement}
                 elif route == "snapshot":
                     messages = payload.get("messages")
                     saved = policy.save_snapshot(
-                        payload.get("session_id"), messages if isinstance(messages, list) else [],
-                        cfg, str(payload.get("trigger") or ""))
+                        sid, messages if isinstance(messages, list) else [],
+                        cfg, str(payload.get("trigger") or ""), tui=tui)
                     result = {"saved": saved}
                 else:  # restore
-                    result = {"context": policy.restore_snapshot(payload.get("session_id"), cfg)}
+                    result = {"context": policy.restore_snapshot(sid, cfg, tui=tui)}
             except Exception as exc:
                 self._log(f"/v1/{route} failed: {exc}")
                 self._send_json(200, {"success": False, "error": "policy failed"})
@@ -219,6 +231,13 @@ _POLICY_ROUTES = {
 }
 
 
+class _Server(ThreadingHTTPServer):
+    # The stdlib default backlog is 5: a burst of hooks from several sessions
+    # (plus plugins) would get connection resets. Every hook must get an answer.
+    request_queue_size = 256
+    daemon_threads = True
+
+
 def create_server(
     port: int,
     config: Optional[Dict[str, Any]] = None,
@@ -233,14 +252,12 @@ def create_server(
         backends={},
         lock=threading.Lock(),
     )
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(state))
-    server.daemon_threads = True
-    return server
+    return _Server(("127.0.0.1", port), make_handler(state))
 
 
 def _acquire_lock():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    fd = open(LOCK_PATH, "w")
+    data_dir().mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = open(lock_path(), "w")
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -257,11 +274,11 @@ def run(port: Optional[int] = None, config: Optional[Dict[str, Any]] = None) -> 
     if lock_fd is None:
         # Another instance is serving: not an error (a login service must not
         # restart-loop because a hook already started the daemon).
-        print(f"subcortex daemon already running (lock: {LOCK_PATH})", file=sys.stderr)
+        print(f"subcortex daemon already running (lock: {lock_path()})", file=sys.stderr)
         return 0
     server = create_server(int(port or cfg["port"]), cfg)
-    server.log_path = str(LOG_PATH)
-    PID_PATH.write_text(str(os.getpid()))
+    server.log_path = str(log_path())
+    pid_path().write_text(str(os.getpid()))
     actual_port = server.server_address[1]
     print(f"subcortex daemon listening on 127.0.0.1:{actual_port} (pid {os.getpid()})")
     try:
@@ -271,7 +288,7 @@ def run(port: Optional[int] = None, config: Optional[Dict[str, Any]] = None) -> 
     finally:
         server.server_close()
         try:
-            PID_PATH.unlink()
+            pid_path().unlink()
         except OSError:
             pass
         lock_fd.close()

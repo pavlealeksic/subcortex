@@ -44,25 +44,115 @@ const LOCAL_MIN_OUTPUT_CHARS = 2000 // cheap pre-filter; the daemon applies the 
 const SNAPSHOT_MESSAGES = 20
 const MAX_ENTRIES = 256
 
-async function post(path: string, body: unknown, ms: number): Promise<any> {
+const PLUGIN_TUI = "cline" // keeps sessions of different TUIs apart in the daemon
+
+// >>> subcortex transport (identical in every subcortex plugin) >>>
+// The daemon is reached over a raw TCP socket, one HTTP/1.0 request per
+// connection. Not fetch: Bun sends even loopback requests through HTTP_PROXY,
+// which breaks every call or hands prompts and output to a proxy. Our side is
+// never half-closed before the reply (Bun then drops the response). node:net is
+// imported lazily: a static import that fails to resolve would stop the host
+// from starting. Every failure, timeout or abort resolves to null.
+const DAEMON = (() => {
+  try {
+    const url = new URL(BASE)
+    return { host: url.hostname.replace(/^\[|\]$/g, ""), port: Number(url.port) || 80 }
+  } catch {
+    return { host: "127.0.0.1", port: 7707 }
+  }
+})()
+const MAX_RESPONSE_BYTES = 8_000_000
+let net: any = undefined // undefined: not loaded yet; null: unavailable, use fetch
+
+async function post(path: string, body: unknown, ms: number, outer?: AbortSignal): Promise<any> {
+  try {
+    if (outer?.aborted) return null
+    if (net === undefined) {
+      try {
+        net = await import("node:net")
+      } catch {
+        net = null
+      }
+    }
+    const payload = JSON.stringify({ tui: PLUGIN_TUI, ...(body as object) })
+    return net ? await viaSocket(path, payload, ms, outer) : await viaFetch(path, payload, ms, outer)
+  } catch {
+    return null
+  }
+}
+
+function viaSocket(path: string, payload: string, ms: number, outer?: AbortSignal): Promise<any> {
+  return new Promise((resolve) => {
+    const chunks: any[] = []
+    let size = 0
+    let settled = false
+    let sock: any
+    const finish = (value: any) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      outer?.removeEventListener("abort", abort)
+      try {
+        sock?.destroy()
+      } catch {}
+      resolve(value)
+    }
+    const abort = () => finish(null)
+    const timer = setTimeout(abort, ms)
+    outer?.addEventListener("abort", abort, { once: true })
+    try {
+      const bytes = Buffer.from(payload, "utf8")
+      sock = net.connect({ host: DAEMON.host, port: DAEMON.port })
+      sock.on("connect", () => {
+        sock.write(`POST ${path} HTTP/1.0\r\nHost: ${DAEMON.host}\r\nContent-Type: application/json\r\n` +
+          `Content-Length: ${bytes.length}\r\n\r\n`)
+        sock.write(bytes)
+      })
+      sock.on("data", (chunk: any) => {
+        size += chunk.length
+        if (size > MAX_RESPONSE_BYTES) finish(null)
+        else chunks.push(chunk)
+      })
+      sock.on("error", abort)
+      sock.on("close", () => finish(parseReply(Buffer.concat(chunks).toString("utf8"))))
+    } catch {
+      finish(null)
+    }
+  })
+}
+
+async function viaFetch(path: string, payload: string, ms: number, outer?: AbortSignal): Promise<any> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), ms)
+  const abort = () => controller.abort()
+  outer?.addEventListener("abort", abort, { once: true })
   try {
     const res = await fetch(BASE + path, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: payload,
       signal: controller.signal,
     })
-    if (!res.ok) return null
-    const data = await res.json()
-    return data && typeof data === "object" && data.success !== false ? data : null
+    return parseReply(`HTTP/1.0 ${res.status} -\r\n\r\n${await res.text()}`)
   } catch {
     return null
   } finally {
     clearTimeout(timer)
+    outer?.removeEventListener("abort", abort)
   }
 }
+
+function parseReply(raw: string): any {
+  const split = raw.indexOf("\r\n\r\n")
+  if (split < 0 || !/^HTTP\/1\.[01] 200 /.test(raw)) return null
+  try {
+    const data = JSON.parse(raw.slice(split + 4))
+    return data && typeof data === "object" && data.success !== false ? data : null
+  } catch {
+    return null
+  }
+}
+// <<< subcortex transport <<<
 
 // Resolve to `fallback` on error or after `ms`, whichever comes first. Never rejects.
 function withDeadline<T>(work: () => Promise<T>, ms: number, fallback: T): Promise<T> {
@@ -142,7 +232,7 @@ async function beforeModel(ctx: any): Promise<any> {
       if (text && !hints.has(text)) {
         remember(hints, text, null)
         work.push(
-          post("/v1/prompt-hint", { prompt: text }, PROMPT_TIMEOUT_MS).then((res) => {
+          post("/v1/prompt-hint", { prompt: text, session_id: conversation }, PROMPT_TIMEOUT_MS).then((res) => {
             if (typeof res?.hint === "string" && res.hint.trim()) remember(hints, text, res.hint)
           }),
         )
@@ -203,7 +293,8 @@ async function afterTool(ctx: any): Promise<any> {
       if (entry.result.length < LOCAL_MIN_OUTPUT_CHARS) return entry
       const res = await post(
         "/v1/tool-output",
-        { output: entry.result, tool: "run_commands", input: { command: String(entry.query ?? "") } },
+        { output: entry.result, tool: "run_commands", input: { command: String(entry.query ?? "") },
+          session_id: String(ctx?.snapshot?.conversationId ?? ctx?.snapshot?.agentId ?? "") },
         OUTPUT_TIMEOUT_MS,
       )
       if (typeof res?.replacement !== "string") return entry

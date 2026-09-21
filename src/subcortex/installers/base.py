@@ -52,20 +52,13 @@ SHELL_GUARD = " 2>/dev/null || true"
 def hook_command(tui: str, event: Optional[str] = None) -> str:
     """Absolute, shell-guarded command a TUI should run for ``event``.
 
-    Prefers the ``subcortex-hook`` console script installed next to the running
-    interpreter (or on PATH); falls back to ``<python> -m subcortex.hook``.
+    ``<python> -I -m subcortex.hook``: isolated mode ignores PYTHONPATH,
+    PYTHONHOME and friends from the user's shell and never puts the working
+    directory (the user's project) on sys.path. Without it, a project with a
+    ``json.py`` (or ``PYTHONPATH=.``) broke every hook, and ran project code in
+    it. The ``subcortex-hook`` console script has the same exposure.
     """
-    bin_dir = Path(sys.executable).parent
-    candidates = [bin_dir / HOOK_SCRIPT]
-    found = shutil.which(HOOK_SCRIPT)
-    if found:
-        candidates.append(Path(found))
-    for candidate in candidates:
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            argv = [str(candidate), tui]
-            break
-    else:
-        argv = [sys.executable, "-m", "subcortex.hook", tui]
+    argv = [sys.executable, "-I", "-m", "subcortex.hook", tui]
     if event:
         argv.append(event)
     return shlex.join(argv) + SHELL_GUARD
@@ -301,9 +294,9 @@ class _StubBackend:
     name = "self-test"
 
     def predict(self, state: Any, questions: Dict[str, Any]) -> Dict[str, Any]:
-        if "simple" in questions:
-            return {"answers": {"simple": {"noul": 0.99}}}
-        return {"answers": {"needed": {"noul": 0.01}}}
+        from ..verdicts import canned_answers
+
+        return canned_answers(questions)
 
     def available(self) -> Tuple[bool, str]:
         return True, "stub"
@@ -327,6 +320,32 @@ SAMPLE_TRANSCRIPT = [
     {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Renamed in 3 files."}]}},
 ]
 BIG_OUTPUT = "compiling module\n" * 1200  # large, successful, no failure markers
+
+
+def _seed_requests(tui: str, cases: List[Tuple[str, str, Dict[str, Any]]], data: Path) -> None:
+    """Record a user request for every sample session, as the prompt hook of a
+    real session would have: the output judge needs one to act."""
+    from .. import policy
+    from ..adapters import get_adapter
+
+    adapter = get_adapter(tui)
+    if adapter is None:
+        return
+    previous = os.environ.get("SUBCORTEX_DATA_DIR")
+    os.environ["SUBCORTEX_DATA_DIR"] = str(data)
+    try:
+        for event, _, payload in cases:
+            resolved = adapter.resolve(event)
+            parsed = adapter.parse(*resolved, payload) if resolved else None
+            if parsed is not None and parsed.session_id:
+                policy.remember_prompt(parsed.session_id, "why does the build take so long?", tui=adapter.name)
+    except Exception:
+        pass
+    finally:
+        if previous is None:
+            os.environ.pop("SUBCORTEX_DATA_DIR", None)
+        else:
+            os.environ["SUBCORTEX_DATA_DIR"] = previous
 
 
 def _fill(value: Any, transcript: str) -> Any:
@@ -376,6 +395,7 @@ def self_test(tui: str, cases: List[Tuple[str, str, Dict[str, Any]]],
         def run_pass(label: str, port: int, must_respond: bool) -> None:
             env = dict(base_env, SUBCORTEX_PORT=str(port),
                        SUBCORTEX_DATA_DIR=str(Path(tmp) / label))
+            _seed_requests(tui, cases, Path(tmp) / label)
             for event, command, payload in cases:
                 try:
                     code, out, err, secs = _run_command(command, _fill(payload, str(transcript)), env)
@@ -756,11 +776,19 @@ class Installer:
         """Executables referenced by the subcortex commands currently in this TUI's config."""
         import re
 
+        patterns = (
+            # <python> [-I] -m subcortex.hook ... (current) / -m subcortex hook (0.1)
+            r"""['"]?(/[^'"\s]+)['"]?\s+(?:-I\s+)?-m\s+subcortex(?:\.hook|\s+hook)\b""",
+            # the console scripts: subcortex-hook (0.2), subcortex mcp
+            r"""['"]?(/[^'"\s]*subcortex(?:-hook)?)['"]?\s""",
+        )
         found: List[str] = []
         for target in self.targets():
-            for match in re.finditer(r"""['"]?(/[^'"\s]*subcortex(?:-hook)?)['"]?\s""", read_text(target.path)):
-                if match.group(1) not in found:
-                    found.append(match.group(1))
+            text = read_text(target.path)
+            for pattern in patterns:
+                for match in re.finditer(pattern, text):
+                    if match.group(1) not in found:
+                        found.append(match.group(1))
         return found
 
     def status(self) -> Dict[str, Any]:

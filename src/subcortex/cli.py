@@ -9,33 +9,26 @@ import signal
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from . import __version__, daemon
+from . import __version__, daemon, localhttp
 from .backends import get_backend
-from .config import LOG_PATH, PID_PATH, load_config
+from .config import load_config, log_path, pid_path
 
 
-def _http(method: str, url: str, payload: Optional[Dict[str, Any]] = None,
+def _http(cfg: Dict[str, Any], method: str, path: str, payload: Optional[Dict[str, Any]] = None,
           timeout: float = 30.0) -> Dict[str, Any]:
-    data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    req = urllib.request.Request(url, data=data, method=method)
-    if data is not None:
-        req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def _base_url(cfg: Dict[str, Any]) -> str:
-    return f"http://127.0.0.1:{int(cfg['port'])}"
+    """JSON from the local daemon (direct socket: never through a proxy)."""
+    status, body = localhttp.request(int(cfg["port"]), method, path, payload, timeout)
+    if not isinstance(body, dict):
+        raise localhttp.LocalHTTPError(f"daemon answered {status} without a JSON object")
+    return body
 
 
 def _health(cfg: Dict[str, Any], timeout: float = 2.0) -> Optional[Dict[str, Any]]:
     try:
-        data = _http("GET", f"{_base_url(cfg)}/health", timeout=timeout)
+        data = _http(cfg, "GET", "/health", timeout=timeout)
         return data if data.get("ok") else None
     except Exception:
         return None
@@ -55,8 +48,8 @@ def _spawn_daemon(cfg: Dict[str, Any]) -> subprocess.Popen:
     root = source_checkout()
     if root:  # dev checkout: make the daemon run this code, whatever its interpreter
         env["PYTHONPATH"] = str(root / "src") + os.pathsep + env.get("PYTHONPATH", "")
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    log = open(LOG_PATH, "ab")
+    log_path().parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    log = open(log_path(), "ab")
     proc = subprocess.Popen(
         [_daemon_interpreter(), "-m", "subcortex", "serve", "--foreground"],
         stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -100,16 +93,16 @@ def cmd_serve(args: argparse.Namespace) -> int:
     proc = _spawn_daemon(cfg)
     if _wait_for_health(cfg):
         print(f"subcortex daemon started: pid {proc.pid}, port {cfg['port']} "
-              f"(log: {LOG_PATH})")
+              f"(log: {log_path()})")
         return 0
-    print(f"daemon (pid {proc.pid}) did not come up within 30s; check {LOG_PATH}",
+    print(f"daemon (pid {proc.pid}) did not come up within 30s; check {log_path()}",
           file=sys.stderr)
     return 1
 
 
 def _stop_daemon() -> int:
     try:
-        pid = int(PID_PATH.read_text().strip())
+        pid = int(pid_path().read_text().strip())
     except (OSError, ValueError):
         print("no daemon PID file; is the daemon running?", file=sys.stderr)
         return 1
@@ -118,7 +111,7 @@ def _stop_daemon() -> int:
     except ProcessLookupError:
         print(f"daemon pid {pid} is not running; cleaning up PID file")
         try:
-            PID_PATH.unlink()
+            pid_path().unlink()
         except OSError:
             pass
         return 0
@@ -150,7 +143,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
     if args.backend:
         payload["backend"] = args.backend
     try:
-        resp = _http("POST", f"{_base_url(cfg)}/decide", payload)
+        resp = _http(cfg, "POST", "/decide", payload)
     except Exception as exc:
         print(f"decide request failed: {exc}", file=sys.stderr)
         return 1
@@ -161,7 +154,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
 def cmd_stats(args: argparse.Namespace) -> int:
     cfg = load_config()
     try:
-        resp = _http("GET", f"{_base_url(cfg)}/stats")
+        resp = _http(cfg, "GET", "/stats")
     except Exception:
         print(f"daemon not reachable on 127.0.0.1:{cfg['port']} "
               "(start it with: subcortex serve)", file=sys.stderr)
@@ -208,7 +201,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             print(f"[ok] daemon started and healthy on 127.0.0.1:{cfg['port']}")
         else:
             ok = False
-            print(f"[FAIL] daemon did not come up; check {LOG_PATH}")
+            print(f"[FAIL] daemon did not come up; check {log_path()}")
 
     from . import installers
 
@@ -455,11 +448,14 @@ def _coerce(key: str, raw: str) -> Any:
         if lowered in ("0", "false", "no", "off"):
             return False
         raise ValueError(f"{key} takes true/false")
-    if isinstance(default, (int, float)):
+    if isinstance(default, (int, float)) or (default is None and key.startswith("thresholds.")):
         try:
-            return type(default)(raw)
+            value = float(raw) if default is None else type(default)(raw)
         except ValueError:
             raise ValueError(f"{key} takes a number") from None
+        if default is None and not 0.0 <= value <= 1.0:
+            raise ValueError(f"{key} is a probability between 0 and 1")
+        return value
     if key == "backend" and raw not in ("laya", "jev"):
         raise ValueError("backend is laya or jev")
     return raw

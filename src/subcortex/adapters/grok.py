@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .. import policy
-from .base import POST_COMPACT, PRE_COMPACT, TOOL_OUTPUT, HookAdapter, HookEvent, Response
+from .base import POST_COMPACT, PRE_COMPACT, PROMPT, TOOL_OUTPUT, HookAdapter, HookEvent, Response
 
 MAX_CONTEXT_CHARS = 9000
 
@@ -38,23 +38,23 @@ def _split_header(text: str):
 class GrokBuildAdapter(HookAdapter):
     name = "grok-build"
     display_name = "Grok Build"
-    events = {"PostToolUse": TOOL_OUTPUT, "PreCompact": PRE_COMPACT, "PostCompact": POST_COMPACT}
+    events = {"UserPromptSubmit": PROMPT, "PostToolUse": TOOL_OUTPUT, "PreCompact": PRE_COMPACT,
+              "PostCompact": POST_COMPACT}
+    delivers_hints = False  # prompt-submit output is discarded; the event only records the request
 
     def parse(self, name: str, kind: str, payload: Dict[str, Any]) -> Optional[HookEvent]:
         event = HookEvent(kind=kind, name=name, payload=payload,
                           session_id=str(payload.get("sessionId") or payload.get("session_id") or ""),
                           transcript_path=str(payload.get("transcriptPath") or ""),
                           trigger=str(payload.get("source") or ""))
-        if kind == PRE_COMPACT and event.transcript_path:
+        if kind == PROMPT:
+            prompt = payload.get("prompt")
+            event.prompt = prompt if isinstance(prompt, str) else ""
+        elif kind == PRE_COMPACT and event.transcript_path:
             chat = Path(event.transcript_path).parent / "chat_history.jsonl"
             if chat.is_file():
                 event.transcript_path = str(chat)
         elif kind == TOOL_OUTPUT:
-            from ..config import load_config
-
-            restored = policy.restore_snapshot(event.session_id, load_config(), require_ready=True)
-            if restored:
-                event.extra["context"] = restored[:MAX_CONTEXT_CHARS]
             result = payload.get("toolResult")
             if payload.get("toolResultTruncated") or not isinstance(result, dict) \
                     or result.get("type") != "Bash" or result.get("signal") == "backgrounded":
@@ -70,6 +70,12 @@ class GrokBuildAdapter(HookAdapter):
             code = result.get("exit_code")
             event.failed = bool(result.get("timed_out")) or (isinstance(code, int) and code != 0)
         return event
+
+    def output_context(self, event: HookEvent, cfg: Dict[str, Any]) -> Optional[str]:
+        # PostCompact output is ignored, so the snapshot rides the next shell call.
+        restored = policy.restore_snapshot(event.session_id, cfg, require_ready=True, tui=self.name,
+                                           commits=event.commits)
+        return restored[:MAX_CONTEXT_CHARS] if restored else None
 
     def render_tool_output(self, event: HookEvent, replacement: Optional[str]) -> Response:
         specific: Dict[str, Any] = {"hookEventName": "PostToolUse"}

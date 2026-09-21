@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import shutil
 import sys
 import tempfile
@@ -196,10 +197,15 @@ class TestDoctorSupport(InstallerCase):
         self.install(installer)
         exes = installer.installed_executables()
         self.assertEqual(len(exes), 1)
-        self.assertTrue(exes[0].endswith(("subcortex-hook", "python", "python3")) or "python" in exes[0])
+        self.assertEqual(exes, [sys.executable])
         settings = self.home / ".claude" / "settings.json"
-        settings.write_text(settings.read_text().replace(exes[0], "/gone/venv/bin/subcortex-hook"))
-        self.assertEqual(installer.installed_executables(), ["/gone/venv/bin/subcortex-hook"])
+        settings.write_text(settings.read_text().replace(exes[0], "/gone/venv/bin/python"))
+        self.assertEqual(installer.installed_executables(), ["/gone/venv/bin/python"])
+
+    def test_hook_commands_are_isolated_from_the_users_python_environment(self):
+        cmd = base.hook_command("claude-code", "PostToolUse")
+        self.assertEqual(shlex.split(cmd.replace(base.SHELL_GUARD, ""))[1:],
+                         ["-I", "-m", "subcortex.hook", "claude-code", "PostToolUse"])
 
 def _hook_script_available() -> bool:
     return (Path(sys.executable).parent / base.HOOK_SCRIPT).exists() or shutil.which(base.HOOK_SCRIPT)

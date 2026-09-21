@@ -15,8 +15,6 @@ from __future__ import annotations
 import json
 import logging
 import sys
-import urllib.error
-import urllib.request
 from typing import Any, Dict, Optional
 
 from . import __version__
@@ -58,23 +56,19 @@ _TOOLS = [
     },
     {
         "name": "subcortex_judge_output",
-        "description": "Judge whether a tool/command output is still needed or disposable.",
+        "description": ("Judge whether a tool/command output is still needed for a request, or "
+                        "disposable. Without the request the output is always kept."),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "output": {"type": "string"},
                 "context": {"type": "string", "description": "What produced the output."},
+                "task": {"type": "string", "description": "The user's request the output serves."},
             },
-            "required": ["output"],
+            "required": ["output", "task"],
         },
     },
 ]
-
-
-def _daemon_url() -> str:
-    from .config import load_config
-
-    return f"http://127.0.0.1:{int(load_config()['port'])}"
 
 
 def _ensure_daemon() -> None:
@@ -89,21 +83,18 @@ def _ensure_daemon() -> None:
 
 
 def _post(path: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    def once() -> Dict[str, Any]:
-        req = urllib.request.Request(
-            _daemon_url() + path,
-            data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode())
+    from . import localhttp
+    from .config import load_config
 
+    port = int(load_config()["port"])
     try:
-        return once()
-    except urllib.error.URLError:
+        _, reply = localhttp.request(port, "POST", path, body, timeout=30)
+    except ConnectionRefusedError:
         _ensure_daemon()
-        return once()
+        _, reply = localhttp.request(port, "POST", path, body, timeout=30)
+    if not isinstance(reply, dict):
+        raise ValueError("daemon reply is not a JSON object")
+    return reply
 
 
 def _call_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -114,7 +105,8 @@ def _call_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         return _post("/verdict/prompt", {"prompt": arguments.get("prompt", "")})
     if name == "subcortex_judge_output":
         return _post("/verdict/output", {"output": arguments.get("output", ""),
-                                         "context": arguments.get("context", "")})
+                                         "context": arguments.get("context", ""),
+                                         "task": arguments.get("task", "")})
     raise ValueError(f"unknown tool {name!r}")
 
 

@@ -22,7 +22,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..config import data_dir
+from .. import state
 from ..transcript import message_from_entry
 from .base import PROMPT, HookAdapter, HookEvent, Response
 
@@ -56,8 +56,21 @@ def _event_message(event: Dict[str, Any]) -> Optional[Dict[str, str]]:
     return {"role": role, "text": msg["text"]} if msg else None
 
 
-def condensation_context(session_id: str, cfg: Dict[str, Any]) -> Optional[str]:
-    """Messages hidden by a condensation not yet reported for this session."""
+def _record(session_id: str, record: Dict[str, Any]) -> None:
+    marker = state.path("openhands", "openhands", session_id)
+    if marker is not None:
+        with state.locked(state.key("openhands", session_id)):
+            state.write_json(marker, record)
+
+
+def condensation_context(session_id: str, cfg: Dict[str, Any],
+                         commits: Optional[List[Any]] = None) -> Optional[str]:
+    """Messages hidden by a condensation not yet reported for this session.
+
+    Only event files newer than the last scan are read (a long conversation has
+    thousands). The "reported" marker is written once the context was delivered
+    (via ``commits``), so a hook that dies mid-way reports it next time.
+    """
     from .. import policy
 
     if not session_id or "/" in session_id:
@@ -65,42 +78,49 @@ def condensation_context(session_id: str, cfg: Dict[str, Any]) -> Optional[str]:
     events_dir = conversations_dir() / session_id.replace("-", "") / "events"
     try:
         files = sorted(events_dir.glob("event-*.json"))[-MAX_EVENT_FILES:]
-    except OSError:
+        marker = state.path("openhands", "openhands", session_id)
+        recorded = state.read_json(marker) if marker is not None else None
+    except Exception:
         return None
-    newest, index = None, -1
+    if not files:
+        return None
+    first_visit = recorded is None
+    seen = (recorded or {}).get("condensation")
+    scanned = str((recorded or {}).get("scanned") or "")
+    newest, index = seen, -1
     for i in range(len(files) - 1, -1, -1):
+        if not first_visit and files[i].name <= scanned:
+            break  # older files were checked on an earlier prompt
         event = _read(files[i])
         if event and event.get("kind") == "Condensation":
             newest, index = event.get("id") or files[i].name, i
             break
-
-    marker = data_dir() / "openhands" / f"{session_id.replace('/', '_')}.json"
+    record = {"condensation": newest, "scanned": files[-1].name}
+    deliver = not first_visit and index != -1 and newest != seen
+    context = None
+    if deliver:
+        limit = int((cfg.get("hooks") or {}).get("snapshot_messages", 5))
+        max_chars = int((cfg.get("hooks") or {}).get("snapshot_chars", 500))
+        messages: List[Dict[str, str]] = []
+        for path in reversed(files[:index]):  # newest hidden message first, stop when enough
+            event = _read(path)
+            msg = _event_message(event) if event else None
+            if msg:
+                messages.append({"role": msg["role"], "text": msg["text"][:max_chars]})
+                if len(messages) >= limit:
+                    break
+        if messages:
+            lines = [f"{m['role']}: {m['text']}" for m in reversed(messages)]
+            context = policy.RESTORE_HEADER + "\n" + "\n".join(lines)
     try:
-        seen = json.loads(marker.read_text()).get("condensation")
-        first_visit = False
-    except (OSError, ValueError, AttributeError):
-        seen, first_visit = None, True
-    if first_visit or newest != seen:
-        try:
-            marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.write_text(json.dumps({"condensation": newest}))
-        except OSError:
-            return None
-    if first_visit or newest is None or newest == seen:
+        state.prune("openhands", policy.SNAPSHOT_MAX_AGE_S)
+        if context and commits is not None:
+            commits.append(lambda: _record(session_id, record))
+        elif record != recorded:
+            _record(session_id, record)
+    except Exception:
         return None
-
-    limit = int((cfg.get("hooks") or {}).get("snapshot_messages", 5))
-    max_chars = int((cfg.get("hooks") or {}).get("snapshot_chars", 500))
-    messages: List[Dict[str, str]] = []
-    for path in files[:index]:
-        event = _read(path)
-        msg = _event_message(event) if event else None
-        if msg:
-            messages.append({"role": msg["role"], "text": msg["text"][:max_chars]})
-    if not messages:
-        return None
-    lines = [f"{m['role']}: {m['text']}" for m in messages[-limit:]]
-    return policy.RESTORE_HEADER + "\n" + "\n".join(lines)
+    return context
 
 
 class OpenHandsAdapter(HookAdapter):
@@ -119,7 +139,7 @@ class OpenHandsAdapter(HookAdapter):
         if not (cfg.get("features") or {}).get("compaction_snapshot", True):
             return None
         try:
-            return condensation_context(event.session_id, cfg)
+            return condensation_context(event.session_id, cfg, event.commits)
         except Exception:
             return None
 

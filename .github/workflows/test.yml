@@ -1,25 +1,36 @@
 name: Tests
 
+# One run per change: pushes to main and pull requests (a PR branch is not also
+# tested on push), docs-only changes skipped, superseded runs cancelled.
 on:
   push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
   pull_request:
+    paths-ignore: ["**.md", "docs/**"]
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   test:
+    # Both OSes stay: launchd vs systemd, MLX detection and the PTY driver differ.
+    # One Python: the oldest supported (requires-python >= 3.11), which is where
+    # compatibility breaks show up.
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.11"
       - uses: oven-sh/setup-bun@v2   # runs the TS plugins in tests/test_plugins.py
       - name: Install
         run: python -m pip install -e . pyyaml

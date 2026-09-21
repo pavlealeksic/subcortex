@@ -31,8 +31,9 @@ class FakeClient:
         self.calls.append(("classify", prompt))
         return {"label": "simple" if self.simple else "complex", "confidence": 0.97}
 
-    def judge(self, output, context):
+    def judge(self, output, context, task=""):
         self.calls.append(("judge", context))
+        self.tasks = getattr(self, "tasks", []) + [task]
         return {"needed": not self.disposable, "p_needed": 0.02 if self.disposable else 0.9}
 
 
@@ -164,9 +165,18 @@ class TestClaudeCode(AdapterCase):
             def classify(self, prompt):
                 return None
 
-            def judge(self, output, context):
+            def judge(self, output, context, task=""):
                 return None
         self.assertIsNone(self.run_hook("claude-code", "UserPromptSubmit", payload, Down()))
+
+
+class TestTaskEvidence(AdapterCase):
+    def test_the_prompt_is_remembered_and_sent_with_the_output(self):
+        client = FakeClient()
+        self.run_hook("claude-code", "UserPromptSubmit",
+                      dict(self.sample("claude-code", "UserPromptSubmit"), prompt="speed up the build"), client)
+        self.run_hook("claude-code", "PostToolUse", self.sample("claude-code", "PostToolUse"), client)
+        self.assertEqual(client.tasks, ["speed up the build"])
 
 
 class TestClaudeClones(AdapterCase):

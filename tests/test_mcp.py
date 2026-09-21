@@ -24,11 +24,9 @@ class StubBackend:
     name = "stub"
 
     def predict(self, state, questions):
-        if "simple" in questions:
-            return {"answers": {"simple": {"noul": 0.97}}}
-        if "needed" in questions:
-            return {"answers": {"needed": {"noul": 0.02}}}
-        return {"answers": {name: {"noul": 0.5} for name in questions}}
+        from subcortex.verdicts import canned_answers
+
+        return canned_answers(questions)  # every prompt simple, every output disposable
 
     def available(self):
         return True, "stub"
@@ -74,7 +72,7 @@ class TestMcpSubprocess(unittest.TestCase):
              "params": {"name": "subcortex_classify_prompt", "arguments": {"prompt": "2+2?"}}},
             {"jsonrpc": "2.0", "id": 4, "method": "tools/call",
              "params": {"name": "subcortex_judge_output",
-                        "arguments": {"output": "x" * 50, "context": "Bash: ls"}}},
+                        "arguments": {"output": "x" * 50, "context": "Bash: ls", "task": "list files"}}},
             {"jsonrpc": "2.0", "id": 5, "method": "tools/call",
              "params": {"name": "subcortex_decide",
                         "arguments": {"state": "s", "questions": {"q": {"type": "noul", "instructions": "?"}}}}},

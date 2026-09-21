@@ -14,7 +14,6 @@ import io
 import json
 import sys
 import time
-import urllib.request
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from . import __version__, installers, provision, service
@@ -202,12 +201,12 @@ class Wizard:
         if not self.restart_daemon():
             ui.error("the daemon did not start; see `subcortex doctor`")
             return
-        url = f"http://127.0.0.1:{int(cfg['port'])}/verdict/prompt"
+        port = int(cfg["port"])
         try:
             with ui.spinner("downloading and loading the model"):
-                _post(url, {"prompt": "what is 2+2?"}, timeout=1800)
+                _post(port, "/verdict/prompt", {"prompt": "what is 2+2?"}, timeout=1800)
             started = time.perf_counter()
-            body = _post(url, {"prompt": "rename foo to bar"}, timeout=60)
+            body = _post(port, "/verdict/prompt", {"prompt": "rename foo to bar"}, timeout=60)
             ms = (time.perf_counter() - started) * 1000
         except Exception as exc:
             ui.error(f"the model did not answer: {exc}")
@@ -269,9 +268,12 @@ class Wizard:
         try:
             with self.ui.spinner("asking jev"):
                 started = time.perf_counter()
-                backend.predict({"prompt": "what is 2+2?"},
-                                {"simple": {"type": "noul", "instructions": "Is `prompt` simple?"}})
-            self.ui.ok(f"key works — a decision took {(time.perf_counter() - started) * 1000:.0f} ms")
+                result = backend.predict(
+                    {"prompt": "what is 2+2?"},
+                    {"arithmetic": {"type": "noul",
+                                    "instructions": "The request in `prompt` asks for an arithmetic result."}})
+            model = result.get("model") if isinstance(result.get("model"), str) else "jev"
+            self.ui.ok(f"key works — {model} answered in {(time.perf_counter() - started) * 1000:.0f} ms")
         except Exception as exc:
             self.ui.error(f"test decision failed: {exc}")
             self.next_steps.append("check the jev key/endpoint: subcortex setup")
@@ -455,11 +457,13 @@ def _resolve(requested: Sequence[str], rows: Sequence[Dict[str, Any]]) -> List[s
     return list(dict.fromkeys(names))
 
 
-def _post(url: str, payload: Dict[str, Any], timeout: float) -> Dict[str, Any]:
-    req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST",
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode())
+def _post(port: int, path: str, payload: Dict[str, Any], timeout: float) -> Dict[str, Any]:
+    from . import localhttp
+
+    _, reply = localhttp.request(port, "POST", path, payload, timeout)
+    if not isinstance(reply, dict):
+        raise ValueError("daemon reply is not a JSON object")
+    return reply
 
 
 def run(args: argparse.Namespace, ui: Optional[UI] = None) -> int:

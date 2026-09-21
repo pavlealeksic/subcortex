@@ -23,9 +23,9 @@ class StubBackend:
     name = "stub"
 
     def predict(self, state, questions):
-        if "simple" in questions:
-            return {"answers": {"simple": {"noul": 0.99}}}
-        return {"answers": {"needed": {"noul": 0.01}}}
+        from subcortex.verdicts import canned_answers
+
+        return canned_answers(questions)  # every prompt simple, every output disposable
 
     def available(self):
         return True, "stub"
@@ -135,7 +135,7 @@ const summary = { id: "s", role: "user", content: [{ type: "text", text: "Contex
   metadata: { kind: "compaction_summary", displayRole: "system", generatedAt: 123, tokensBefore: 9 } }
 const r2 = await plugin.hooks.beforeModel({ snapshot: snap, request: { messages: [summary, user], tools: [] } })
 out.restored = r2?.messages?.[0]?.content?.at(-1)?.text
-const r3 = await plugin.hooks.afterTool({ toolCall: { toolName: "run_commands" }, result: { output: [
+const r3 = await plugin.hooks.afterTool({ snapshot: snap, toolCall: { toolName: "run_commands" }, result: { output: [
   { query: "make", result: BIG_TEXT, success: true },
   { query: "false", result: BIG_TEXT, error: "Command exited with code 1", success: false }] } })
 out.trimmed = r3?.result?.output?.[0]?.result

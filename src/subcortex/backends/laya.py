@@ -81,6 +81,9 @@ class LayaBackend:
         self.model = str(config.get("model") or DEFAULT_MODEL).strip().lower()
         self._agents: Dict[Tuple[str, str], Any] = {}
         self._lock = threading.Lock()
+        # The daemon serves requests on many threads, but a model is not safe to
+        # run concurrently (MLX shares one Metal queue; torch modules keep state).
+        self._predict_lock = threading.Lock()
 
     # -- availability ---------------------------------------------------------
 
@@ -139,7 +142,8 @@ class LayaBackend:
 
     def predict(self, state: Any, questions: Dict[str, Any]) -> Dict[str, Any]:
         agent = self._load(self.model)
-        result = agent.predict(state, questions)
+        with self._predict_lock:
+            result = agent.predict(state, questions)
         if not isinstance(result, dict):
             result = {"answers": result}
         return result

@@ -9,8 +9,8 @@ Keys::
     backend    "laya" | "jev"            (default "laya")
     port       daemon port               (default 7707)
     model      laya model alias          (default "multilingual")
-    thresholds prompt_simple_confidence  (0.8)
-               output_needed_threshold   (0.3)
+    thresholds prompt_simple_confidence  (null = calibrated per backend)
+               output_needed_threshold   (null = calibrated per backend)
                min_output_chars          (6000)
     features   prompt_hint, trim_output, compaction_snapshot  (all true)
     hooks      autostart_daemon (true)  a hook that finds the daemon down starts it
@@ -33,22 +33,21 @@ from typing import Any, Dict, Optional
 
 CONFIG_PATH = Path.home() / ".config" / "subcortex" / "config.json"
 
-# Runtime state: dedicated backend venv (created by a later installer), daemon
-# lock/PID/log.
+# The backend venv. Daemon lock/PID/log and session state are resolved per call
+# under data_dir() (SUBCORTEX_DATA_DIR overrides it).
 DATA_DIR = Path.home() / ".local" / "share" / "subcortex"
 VENV_PYTHON = DATA_DIR / "venv" / "bin" / "python"
 VENV_PIP = DATA_DIR / "venv" / "bin" / "pip"
-LOCK_PATH = DATA_DIR / "daemon.lock"
-PID_PATH = DATA_DIR / "daemon.pid"
-LOG_PATH = DATA_DIR / "daemon.log"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "backend": "laya",
     "port": 7707,
     "model": "multilingual",
     "thresholds": {
-        "prompt_simple_confidence": 0.8,
-        "output_needed_threshold": 0.3,
+        # null = the calibrated rule of the active backend (verdicts.py); a
+        # number overrides that rule's primary threshold.
+        "prompt_simple_confidence": None,
+        "output_needed_threshold": None,
         "min_output_chars": 6000,
     },
     "features": {
@@ -66,11 +65,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "snapshot_chars": 500,
     },
     "jev": {
-        "base_url": "https://api.typesafe.ai/v1",
-        "endpoint_path": "/systemone",
+        "base_url": "https://api.typesafe.ai",
+        "endpoint_path": "/v1/systemone",
         "api_key_env": "TYPESAFE_API_KEY",
         "model": "jev-latest",
-        "timeout": 30,
+        "timeout": 2.5,
     },
 }
 
@@ -97,6 +96,18 @@ def data_dir() -> Path:
     """Runtime state dir, resolved per call so tests can redirect HOME."""
     override = os.environ.get("SUBCORTEX_DATA_DIR", "").strip()
     return Path(override) if override else Path.home() / ".local" / "share" / "subcortex"
+
+
+def lock_path() -> Path:
+    return data_dir() / "daemon.lock"
+
+
+def pid_path() -> Path:
+    return data_dir() / "daemon.pid"
+
+
+def log_path() -> Path:
+    return data_dir() / "daemon.log"
 
 
 def config_path() -> Path:
@@ -152,7 +163,7 @@ def unset_config(dotted: str) -> bool:
     if parts[-1] not in node:
         return False
     del node[parts[-1]]
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    _atomic_write(path, json.dumps(data, indent=2) + "\n")
     return True
 
 
@@ -169,8 +180,27 @@ def save_config(updates: Dict[str, Any]) -> Path:
         pass
     _merge(data, updates)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    _atomic_write(path, json.dumps(data, indent=2) + "\n")
     return path
+
+
+def _atomic_write(path: Path, text: str, mode: int = 0o644) -> None:
+    """Hooks read config.json concurrently: a torn file would silently mean
+    defaults (re-enabling what the user switched off), so replace it whole."""
+    import tempfile  # only writers pay for it; hooks only read
+
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # -- secrets ---------------------------------------------------------------------------------
@@ -195,18 +225,13 @@ def _read_secrets() -> Dict[str, str]:
 def read_secret(name: str) -> Optional[str]:
     """``$name`` if set, else the value stored in secrets.json, else None."""
     value = os.environ.get(name, "").strip()
-    return value or _read_secrets().get(name) or None
+    return value or (_read_secrets().get(name) or "").strip() or None
 
 
 def _write_secrets(data: Dict[str, str]) -> Path:
     path = secrets_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        fh.write(json.dumps(data, indent=2) + "\n")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
+    _atomic_write(path, json.dumps(data, indent=2) + "\n", mode=0o600)
     return path
 
 

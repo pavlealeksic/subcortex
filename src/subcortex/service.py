@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 from xml.sax.saxutils import escape
 
-from .config import LOG_PATH
+from .config import log_path
 from .provision import daemon_python, source_checkout
 
 LABEL = "ai.subcortex.daemon"
@@ -77,8 +77,8 @@ def render(python: Optional[str] = None) -> str:
   <key>KeepAlive</key>
   <dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>30</integer>
-  <key>StandardOutPath</key><string>{escape(str(LOG_PATH))}</string>
-  <key>StandardErrorPath</key><string>{escape(str(LOG_PATH))}</string>
+  <key>StandardOutPath</key><string>{escape(str(log_path()))}</string>
+  <key>StandardErrorPath</key><string>{escape(str(log_path()))}</string>
 </dict>
 </plist>
 """

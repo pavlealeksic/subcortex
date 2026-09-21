@@ -12,10 +12,14 @@ from subcortex.config import DEFAULT_CONFIG
 
 
 class FakeBackend:
+    """A sure model: every prompt simple, every output needed."""
+
     name = "fake"
 
     def predict(self, state, questions):
-        return {"answers": {name: {"noul": 0.9} for name in questions}}
+        from subcortex.verdicts import canned_answers
+
+        return canned_answers(questions, simple=True, disposable=False)
 
 
 class ExplodingBackend:
@@ -78,7 +82,7 @@ class TestDaemon(unittest.TestCase):
             "questions": {"hard": {"type": "noul", "instructions": "Is it hard?"}},
         })
         self.assertTrue(data["success"])
-        self.assertEqual(data["answers"], {"hard": {"noul": 0.9}})
+        self.assertEqual(data["answers"], {"hard": {"type": "noul", "noul": 0.5}})
 
     def test_decide_missing_fields(self):
         try:
@@ -100,7 +104,7 @@ class TestDaemon(unittest.TestCase):
         data = post(self.fx.url + "/verdict/prompt", {"prompt": "what is 2+2?"})
         self.assertTrue(data["success"])
         self.assertEqual(data["verdict"]["label"], "simple")
-        self.assertAlmostEqual(data["verdict"]["confidence"], 0.9)
+        self.assertAlmostEqual(data["verdict"]["confidence"], 1.0)
 
     def test_verdict_output_short(self):
         data = post(self.fx.url + "/verdict/output", {"output": "short"})
@@ -109,10 +113,10 @@ class TestDaemon(unittest.TestCase):
 
     def test_verdict_output_long(self):
         data = post(self.fx.url + "/verdict/output",
-                    {"output": "x" * 7000, "context": "task"})
+                    {"output": "x" * 7000, "context": "Bash: make", "task": "fix the build"})
         self.assertTrue(data["success"])
         self.assertTrue(data["verdict"]["needed"])
-        self.assertAlmostEqual(data["verdict"]["p_needed"], 0.9)
+        self.assertAlmostEqual(data["verdict"]["p_needed"], 1.0)
 
     def test_stats(self):
         post(self.fx.url + "/decide", {"state": "x", "questions": {"q": {}}})
@@ -134,9 +138,9 @@ class StubPolicyBackend:
     name = "stub"
 
     def predict(self, state, questions):
-        if "simple" in questions:
-            return {"answers": {"simple": {"noul": 0.95}}}
-        return {"answers": {"needed": {"noul": 0.02}}}
+        from subcortex.verdicts import canned_answers
+
+        return canned_answers(questions)  # every prompt simple, every output disposable
 
 
 class TestPolicyEndpoints(unittest.TestCase):
@@ -165,7 +169,12 @@ class TestPolicyEndpoints(unittest.TestCase):
 
     def test_tool_output(self):
         big = "compiling module\n" * 800
-        body = post(self.d.url + "/v1/tool-output", {"output": big, "tool": "bash", "input": {"command": "make"}})
+        # No request known for the session: nothing to judge against, output kept.
+        self.assertIsNone(post(self.d.url + "/v1/tool-output", {"output": big, "tool": "bash",
+                                                                 "session_id": "s9"})["replacement"])
+        post(self.d.url + "/v1/prompt-hint", {"prompt": "why is the build slow?", "session_id": "s9", "tui": "x"})
+        body = post(self.d.url + "/v1/tool-output", {"output": big, "tool": "bash", "input": {"command": "make"},
+                                                     "session_id": "s9", "tui": "x"})
         self.assertIn("[subcortex: truncated", body["replacement"])
         self.assertIsNone(post(self.d.url + "/v1/tool-output", {"output": big, "failed": True})["replacement"])
         self.assertIsNone(post(self.d.url + "/v1/tool-output", {"output": "short"})["replacement"])

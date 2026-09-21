@@ -37,9 +37,9 @@ class StubBackend:
     name = "stub"
 
     def predict(self, state, questions):
-        if "simple" in questions:
-            return {"answers": {"simple": {"noul": 0.99}}}
-        return {"answers": {"needed": {"noul": 0.01}}}
+        from subcortex.verdicts import canned_answers
+
+        return canned_answers(questions)  # every prompt simple, every output disposable
 
     def available(self):
         return True, "stub"

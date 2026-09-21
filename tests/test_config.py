@@ -29,11 +29,11 @@ class TestConfigDefaults(unittest.TestCase):
         self.assertEqual(cfg["backend"], "laya")
         self.assertEqual(cfg["port"], 7707)
         self.assertEqual(cfg["model"], "multilingual")
-        self.assertEqual(cfg["thresholds"]["prompt_simple_confidence"], 0.8)
-        self.assertEqual(cfg["thresholds"]["output_needed_threshold"], 0.3)
+        self.assertIsNone(cfg["thresholds"]["prompt_simple_confidence"])  # calibrated per backend
+        self.assertIsNone(cfg["thresholds"]["output_needed_threshold"])
         self.assertEqual(cfg["thresholds"]["min_output_chars"], 6000)
         self.assertEqual(cfg["jev"]["model"], "jev-latest")
-        self.assertEqual(cfg["jev"]["timeout"], 30)
+        self.assertEqual(cfg["jev"]["timeout"], 2.5)
         self.assertEqual(cfg["jev"]["api_key_env"], "TYPESAFE_API_KEY")
 
     def test_env_override(self):
@@ -63,7 +63,7 @@ class TestConfigDefaults(unittest.TestCase):
         self.assertEqual(cfg["backend"], "jev")
         self.assertEqual(cfg["thresholds"]["min_output_chars"], 100)
         # untouched defaults survive
-        self.assertEqual(cfg["thresholds"]["output_needed_threshold"], 0.3)
+        self.assertIsNone(cfg["thresholds"]["output_needed_threshold"])
         self.assertEqual(cfg["port"], DEFAULT_CONFIG["port"])
 
     def test_corrupt_file_degrades_to_defaults(self):
