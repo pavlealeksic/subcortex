@@ -158,7 +158,13 @@ or plugins are preferred wherever a TUI has them. Adding a native adapter:
 ```sh
 python3 -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/python -m unittest discover -s tests   # no model or API key needed; bun runs the plugin tests
+SUBCORTEX_E2E=1 .venv/bin/python -m unittest tests.test_e2e   # real TUIs, mock LLM API, isolated dirs
 ```
+
+The end-to-end suite drives the real Claude Code, Kimi Code and OpenCode
+binaries (whichever are installed) against a local fake LLM API
+(`tests/e2e/mock_llm.py`) — no network, no cost — and asserts on what each TUI
+actually sent to the model. It never touches your real TUI configs.
 
 Releases publish to PyPI via Trusted Publishing (`.github/workflows/publish.yml`):
 bump `version` in `pyproject.toml`, then `gh release create v<X.Y.Z> --generate-notes`.
