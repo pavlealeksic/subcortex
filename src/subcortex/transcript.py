@@ -65,6 +65,38 @@ def _text(content: Any) -> str:
     return ""
 
 
+def _display_text(entry: Dict[str, Any]) -> str:
+    """What the user typed, without the hook context the TUI appended to the
+    model-bound message (Gemini CLI ``displayContent``, Qwen Code
+    ``systemPayload.displayText``)."""
+    if "displayContent" in entry:
+        return _text(entry["displayContent"])
+    payload = entry.get("systemPayload")
+    if isinstance(payload, dict) and isinstance(payload.get("displayText"), str):
+        return payload["displayText"]
+    return ""
+
+
+def _without_our_context(text: str) -> str:
+    """Drop what subcortex itself injected (hint lines, restored-context blocks),
+    so a snapshot never carries — or compounds — our own output."""
+    if "[subcortex]" not in text:
+        return text
+    kept, skipping = [], False
+    for line in text.split("\n"):
+        if line.lstrip().startswith("[subcortex] Recent conversation from before context compaction"):
+            skipping = True  # a restore block runs to the next blank line
+            continue
+        if skipping:
+            if line.strip():
+                continue
+            skipping = False
+        if line.lstrip().startswith("[subcortex]"):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def message_from_entry(entry: Any) -> Optional[Dict[str, str]]:
     """``{"role", "text"}`` for one transcript record, or None if it isn't a
     user/assistant message with text."""
@@ -91,7 +123,7 @@ def message_from_entry(entry: Any) -> Optional[Dict[str, str]]:
         text = _text(entry.get("content", entry.get("parts", entry.get("text"))))
         if not text and isinstance(message, str):
             text = message
-    text = text.strip()
+    text = _without_our_context(_display_text(entry) or text).strip()
     wrapped = _unwrap_user(text)
     if wrapped is not None:
         text = wrapped

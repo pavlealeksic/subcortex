@@ -77,6 +77,23 @@ class TestShapes(unittest.TestCase):
             msgs = transcript.last_messages(path, limit=2)
         self.assertTrue(msgs[-1]["text"].startswith("line 7999"))
 
+    def test_our_own_injected_context_is_never_snapshotted(self):
+        from subcortex import policy
+
+        hint = policy.HINT.format(p=0.93)
+        restored = policy.RESTORE_HEADER + "\nuser: older question\nassistant: older answer"
+        path = write([
+            {"type": "user", "content": [{"text": f"remember PELICAN-42\n<hook_context>{hint}</hook_context>"}],
+             "displayContent": "remember PELICAN-42"},                       # Gemini CLI
+            {"role": "user", "content": f"/compress\n\n{restored}\n\n{hint}"},  # any other TUI
+            {"role": "assistant", "content": "Noted."},
+        ])
+        self.assertEqual(transcript.last_messages(path), [
+            {"role": "user", "text": "remember PELICAN-42"},
+            {"role": "user", "text": "/compress"},
+            {"role": "assistant", "text": "Noted."},
+        ])
+
     def test_garbage_never_raises(self):
         for bad in (None, "", 42, "/nonexistent/file.jsonl", write("not json at all\n{broken")):
             self.assertEqual(transcript.last_messages(bad), [])
