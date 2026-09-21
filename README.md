@@ -158,7 +158,7 @@ or plugins are preferred wherever a TUI has them. Adding a native adapter:
 ```sh
 python3 -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/python -m unittest discover -s tests   # no model or API key needed; bun runs the plugin tests
-SUBCORTEX_E2E=1 .venv/bin/python -m unittest tests.test_e2e   # real TUIs, mock LLM API, isolated dirs
+SUBCORTEX_E2E=1 .venv/bin/python -m unittest discover -s tests -p test_e2e.py   # real TUIs, mock LLM API
 ```
 
 The end-to-end suite drives the real Claude Code, Kimi Code and OpenCode
