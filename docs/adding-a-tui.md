@@ -74,11 +74,20 @@ Set `min_version` when hooks appeared in a known release.
 Plugins call the daemon's policy endpoints instead of re-implementing policy:
 
 ```
-POST /v1/prompt-hint  {prompt}                        -> {hint: str|null}
-POST /v1/tool-output  {output, tool?, input?, failed?} -> {replacement: str|null}
-POST /v1/snapshot     {session_id, messages}          -> {saved}
-POST /v1/restore      {session_id}                     -> {context: str|null}
+POST /v1/prompt-hint  {prompt, session_id, tui}                       -> {hint: str|null}
+POST /v1/tool-output  {output, tool?, input?, failed?, session_id, tui} -> {replacement: str|null}
+POST /v1/snapshot     {session_id, messages, tui}                     -> {saved}
+POST /v1/restore      {session_id, tui}                               -> {context: str|null}
 ```
+
+- Send `session_id` and `tui` everywhere: state is keyed by both, and the
+  prompt-hint call is what records the request that tool output is judged by.
+- Every request carries the `X-Subcortex-Token` header, read from the token file
+  the installer templates into the plugin (`__SUBCORTEX_TOKEN_FILE__`), and
+  `X-Subcortex-Timeout-Ms` with the plugin's own timeout.
+- Copy the transport block between the `>>> subcortex transport` markers from an
+  existing plugin verbatim (a test keeps them identical): it talks raw TCP,
+  because Bun sends even loopback `fetch` through `HTTP_PROXY`.
 
 `messages` may be the TUI's raw message objects; they're normalized. Every
 hook must catch everything and put a hard timeout on every request.

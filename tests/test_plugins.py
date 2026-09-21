@@ -202,6 +202,20 @@ class TestOpenCodePlugin(PluginCase):
         self.assertEqual(exports, ['export default { id: "subcortex", server }'])
 
 
+class TestTransportBlock(unittest.TestCase):
+    def test_every_plugin_carries_the_same_transport(self):
+        blocks = {}
+        for tui in ("opencode", "amp", "pi", "cline"):
+            source = bundled_plugin(tui, "subcortex.ts")
+            start = source.index("// >>> subcortex transport")
+            end = source.index("// <<< subcortex transport")
+            blocks[tui] = source[start:end]
+        self.assertEqual(len(set(blocks.values())), 1, "fix one plugin's transport, fix them all")
+        block = blocks["opencode"]
+        self.assertNotIn("fetch(BASE", block.split("async function viaFetch")[0])  # raw socket first
+        self.assertIn("X-Subcortex-Token", block)
+
+
 class TestAmpPlugin(PluginCase):
     def test_hooks_against_the_daemon(self):
         out = self.run_plugin("amp", AMP_DRIVER)

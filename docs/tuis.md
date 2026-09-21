@@ -3,7 +3,8 @@
 What `subcortex install <tui>` writes, which events it uses, and what to know.
 Everything here was verified against each TUI's docs and source at its latest
 release as of 2026-09-21. Every hook command has the form
-`'<abs>/subcortex-hook' <tui> <event> 2>/dev/null || true`.
+`'<python>' -I -m subcortex.hook <tui> <event> 2>/dev/null || true` (isolated
+from `PYTHONPATH` and the project directory; harmless if subcortex is gone).
 
 ## Command hooks
 
