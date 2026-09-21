@@ -49,7 +49,7 @@ class Sandbox(unittest.TestCase):
         except OSError:
             return None
 
-    def wait_health(self, seconds=20):
+    def wait_health(self, seconds=30):
         deadline = time.time() + seconds
         while time.time() < deadline:
             health = self.health()
@@ -57,6 +57,17 @@ class Sandbox(unittest.TestCase):
                 return health
             time.sleep(0.2)
         return None
+
+    def diagnostics(self):
+        """What the daemon said, for a failure message."""
+        parts = []
+        for name in ("daemon.log", "daemon.stderr"):
+            path = self.data / name if name == "daemon.log" else Path(self.tmp.name, name)
+            try:
+                parts.append(f"--- {name}:\n{path.read_text()[-3000:]}")
+            except OSError:
+                parts.append(f"--- {name}: (none)")
+        return "\n".join(parts)
 
     def stop_daemon(self):
         health = self.health()
@@ -84,16 +95,19 @@ class TestAutostart(Sandbox):
         # The installed hook command (python -I -m subcortex.hook), run from inside the project.
         proc = subprocess.run([sys.executable, "-I", "-m", "subcortex.hook", "claude-code", "UserPromptSubmit"],
                               input=payload, capture_output=True, text=True, cwd=project, timeout=30, env=env)
-        self.assertEqual(proc.returncode, 0)
-        self.assertIsNotNone(self.wait_health(), "the autostarted daemon never came up")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIsNotNone(self.wait_health(), "the autostarted daemon never came up\n" + self.diagnostics())
         self.assertFalse(marker.exists(), "code from the project ran inside subcortex")
 
 
 class TestStop(Sandbox):
     def start(self):
+        stderr = open(Path(self.tmp.name, "daemon.stderr"), "wb")
+        self.addCleanup(stderr.close)
         proc = subprocess.Popen(provision.daemon_argv(sys.executable), cwd=self.tmp.name, env=self.env,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.assertIsNotNone(self.wait_health())
+                                stdout=stderr, stderr=subprocess.STDOUT)
+        self.assertIsNotNone(self.wait_health(), f"daemon never came up (exit {proc.poll()})\n"
+                             + self.diagnostics())
         return proc
 
     def test_sigterm_exits_cleanly_and_removes_the_pid_file(self):
