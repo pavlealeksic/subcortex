@@ -371,6 +371,7 @@ def self_test(tui: str, cases: List[Tuple[str, str, Dict[str, Any]]],
         base_env = {k: v for k, v in os.environ.items()
                     if k not in ("PYTHONPATH", "SUBCORTEX_DEBUG") and not k.startswith("SUBCORTEX_")}
         base_env["SUBCORTEX_CONFIG"] = str(config_file)
+        base_env["SUBCORTEX_AUTOSTART"] = "0"  # the daemon-down pass must not spawn a daemon
 
         def run_pass(label: str, port: int, must_respond: bool) -> None:
             env = dict(base_env, SUBCORTEX_PORT=str(port),
@@ -735,6 +736,17 @@ class Installer:
             self._apply(result, plans)
         result.ok = True
         return result
+
+    def installed_executables(self) -> List[str]:
+        """Executables referenced by the subcortex commands currently in this TUI's config."""
+        import re
+
+        found: List[str] = []
+        for target in self.targets():
+            for match in re.finditer(r"""['"]?(/[^'"\s]*subcortex(?:-hook)?)['"]?\s""", read_text(target.path)):
+                if match.group(1) not in found:
+                    found.append(match.group(1))
+        return found
 
     def status(self) -> Dict[str, Any]:
         installed = []

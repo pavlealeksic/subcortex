@@ -57,6 +57,7 @@ class E2ECase(unittest.TestCase):
                                     backend_factory=lambda c, name=None: StubBackend())
         threading.Thread(target=self.daemon.serve_forever, daemon=True).start()
         self.subcortex_env = {"SUBCORTEX_CONFIG": str(config), "SUBCORTEX_DATA_DIR": str(self.root / "data"),
+                              "SUBCORTEX_AUTOSTART": "0",
                               "SUBCORTEX_PORT": str(self.daemon.server_address[1])}
 
     def tearDown(self):

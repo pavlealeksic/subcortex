@@ -7,3 +7,9 @@ from pathlib import Path
 SRC = str(Path(__file__).resolve().parents[1] / "src")
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
+
+import os  # noqa: E402
+
+# Hooks start a missing daemon by default; tests (and the subprocesses they
+# spawn with a copy of this environment) must never do that.
+os.environ["SUBCORTEX_AUTOSTART"] = "0"

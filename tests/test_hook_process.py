@@ -34,7 +34,7 @@ class HookProcess(unittest.TestCase):
         config = Path(self.tmp.name, "config.json")
         config.write_text("{}")
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("SUBCORTEX_")}
-        self.env.update(PYTHONPATH=SRC, SUBCORTEX_CONFIG=str(config),
+        self.env.update(PYTHONPATH=SRC, SUBCORTEX_CONFIG=str(config), SUBCORTEX_AUTOSTART="0",
                         SUBCORTEX_DATA_DIR=self.tmp.name, SUBCORTEX_PORT=str(free_port()))
 
     def tearDown(self):

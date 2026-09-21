@@ -189,6 +189,18 @@ class TestLegacyCleanup(InstallerCase):
         self.assertTrue((self.home / ".codex" / "hooks.json").is_file())
 
 
+
+class TestDoctorSupport(InstallerCase):
+    def test_installed_executables_are_found_and_dangling_ones_reported(self):
+        installer = installers.get_installer("claude-code")
+        self.install(installer)
+        exes = installer.installed_executables()
+        self.assertEqual(len(exes), 1)
+        self.assertTrue(exes[0].endswith(("subcortex-hook", "python", "python3")) or "python" in exes[0])
+        settings = self.home / ".claude" / "settings.json"
+        settings.write_text(settings.read_text().replace(exes[0], "/gone/venv/bin/subcortex-hook"))
+        self.assertEqual(installer.installed_executables(), ["/gone/venv/bin/subcortex-hook"])
+
 def _hook_script_available() -> bool:
     return (Path(sys.executable).parent / base.HOOK_SCRIPT).exists() or shutil.which(base.HOOK_SCRIPT)
 

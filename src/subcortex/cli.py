@@ -206,6 +206,29 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             ok = False
             print(f"[FAIL] daemon did not come up; check {LOG_PATH}")
 
+    from . import installers
+
+    wired = []
+    for name in installers.names():
+        installer = installers.get_installer(name, mcp=True)
+        try:
+            if not installer.status()["installed"]:
+                continue
+            missing = [exe for exe in installer.installed_executables() if not os.access(exe, os.X_OK)]
+        except Exception as exc:
+            print(f"[FAIL] {name}: could not read its config ({exc})")
+            ok = False
+            continue
+        wired.append(name)
+        if missing:
+            ok = False
+            print(f"[FAIL] {name}: hook executable missing: {', '.join(missing)}")
+            print(f"       fix: subcortex install {name}  (rewrites the hooks for this install)")
+        else:
+            print(f"[ok] {name}: hooks installed")
+    if not wired:
+        print("[..] no TUI integrations installed yet (see: subcortex tuis)")
+
     print(f"\n{'all checks passed' if ok else 'some checks failed — see fixes above'}")
     return 0 if ok else 1
 

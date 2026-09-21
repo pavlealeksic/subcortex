@@ -133,10 +133,15 @@ HTTP surface (all on `127.0.0.1:<port>`):
   "port": 7707,
   "features": {"prompt_hint": true, "trim_output": true, "compaction_snapshot": true},
   "thresholds": {"prompt_simple_confidence": 0.8, "output_needed_threshold": 0.3, "min_output_chars": 6000},
-  "hooks": {"budget_s": 4.0, "http_timeout_s": 3.0, "head_chars": 1000, "tail_chars": 500,
+  "hooks": {"autostart_daemon": true, "budget_s": 4.0, "http_timeout_s": 3.0, "head_chars": 1000, "tail_chars": 500,
             "snapshot_messages": 5, "snapshot_chars": 500}
 }
 ```
+
+Hooks start the daemon themselves when they find it down (at most once a
+minute; set `hooks.autostart_daemon` to `false` or `SUBCORTEX_AUTOSTART=0` to
+turn that off) — the hook that notices still passes through untouched.
+`subcortex doctor` also checks every installed integration's hook executable.
 
 Runtime state (daemon log/PID, compaction snapshots, `hooks.log`) lives in
 `~/.local/share/subcortex/` (`SUBCORTEX_DATA_DIR`). Set `SUBCORTEX_DEBUG=1` to

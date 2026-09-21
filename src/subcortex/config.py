@@ -13,7 +13,8 @@ Keys::
                output_needed_threshold   (0.3)
                min_output_chars          (6000)
     features   prompt_hint, trim_output, compaction_snapshot  (all true)
-    hooks      budget_s (4.0)  hard wall-clock cap for one hook invocation
+    hooks      autostart_daemon (true)  a hook that finds the daemon down starts it
+               budget_s (4.0)  hard wall-clock cap for one hook invocation
                http_timeout_s (3.0), head_chars (1000), tail_chars (500),
                snapshot_messages (5), snapshot_chars (500)
     jev        base_url, endpoint_path, api_key_env, model, timeout
@@ -56,6 +57,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "compaction_snapshot": True,
     },
     "hooks": {
+        "autostart_daemon": True,
         "budget_s": 4.0,
         "http_timeout_s": 3.0,
         "head_chars": 1000,
@@ -83,7 +85,12 @@ _ENV_OVERRIDES = {
     "SUBCORTEX_JEV_MODEL": ("jev", "model", str),
     "SUBCORTEX_JEV_TIMEOUT": ("jev", "timeout", float),
     "SUBCORTEX_HOOK_BUDGET": ("hooks", "budget_s", float),
+    "SUBCORTEX_AUTOSTART": ("hooks", "autostart_daemon", "bool"),
 }
+
+
+def _bool(raw: str) -> bool:
+    return raw.strip().lower() not in ("0", "false", "no", "off", "")
 
 
 def data_dir() -> Path:
@@ -121,7 +128,7 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
         if not raw:
             continue
         try:
-            value = coerce(raw)
+            value = _bool(raw) if coerce == "bool" else coerce(raw)
         except (TypeError, ValueError):
             continue
         target = cfg[section] if section else cfg
