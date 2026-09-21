@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional
 
 from . import __version__, daemon
 from .backends import get_backend
-from .config import LOG_PATH, PID_PATH, VENV_PYTHON, load_config
+from .config import LOG_PATH, PID_PATH, load_config
 
 
 def _http(method: str, url: str, payload: Optional[Dict[str, Any]] = None,
@@ -42,15 +42,19 @@ def _health(cfg: Dict[str, Any], timeout: float = 2.0) -> Optional[Dict[str, Any
 
 
 def _daemon_interpreter() -> str:
-    """Prefer the dedicated backend venv; fall back to the current interpreter."""
-    return str(VENV_PYTHON) if VENV_PYTHON.exists() else sys.executable
+    from .provision import daemon_python
+
+    return daemon_python()
 
 
 def _spawn_daemon(cfg: Dict[str, Any]) -> subprocess.Popen:
     """Spawn a detached background daemon (new session, logs to daemon.log)."""
-    src_root = Path(__file__).resolve().parents[1]
     env = dict(os.environ)
-    env["PYTHONPATH"] = str(src_root) + os.pathsep + env.get("PYTHONPATH", "")
+    from .provision import source_checkout
+
+    root = source_checkout()
+    if root:  # dev checkout: make the daemon run this code, whatever its interpreter
+        env["PYTHONPATH"] = str(root / "src") + os.pathsep + env.get("PYTHONPATH", "")
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     log = open(LOG_PATH, "ab")
     proc = subprocess.Popen(
@@ -238,8 +242,26 @@ def _resolve_tuis(args: argparse.Namespace) -> Optional[list]:
 
     requested = list(args.tuis or []) + ([args.tui] if getattr(args, "tui", None) else [])
     if not requested:
-        print("name at least one TUI (see: subcortex tuis)", file=sys.stderr)
-        return None
+        from .ui import UI, Cancelled
+        from .wizard import pick_tuis, tui_rows
+
+        ui = UI()
+        if not ui.interactive:
+            print("name at least one TUI, 'detected' or 'all' (see: subcortex tuis)", file=sys.stderr)
+            return None
+        rows = tui_rows()
+        if args.command == "uninstall":
+            rows = [r for r in rows if r["installed"]]
+            if not rows:
+                print("subcortex isn't installed in any TUI")
+                return []
+            preselected = set()
+        else:
+            preselected = {r["name"] for r in rows if r["detected"] and not r["installed"]}
+        try:
+            return pick_tuis(ui, f"{args.command.capitalize()} which TUIs?", rows, preselected)
+        except Cancelled:
+            return []
     if requested == ["all"]:
         return installers.names()
     if requested == ["detected"]:
@@ -260,11 +282,14 @@ def _resolve_tuis(args: argparse.Namespace) -> Optional[list]:
 
 
 def _confirm(prompt: str) -> bool:
-    if not sys.stdin.isatty():
+    from .ui import UI, Cancelled
+
+    ui = UI()
+    if not ui.interactive:
         return False
     try:
-        return input(f"{prompt} [y/N] ").strip().lower() in ("y", "yes")
-    except EOFError:
+        return ui.confirm(prompt, default=False)
+    except Cancelled:
         return False
 
 
@@ -381,6 +406,140 @@ def cmd_wrap(args: argparse.Namespace) -> int:
     return proc.returncode
 
 
+def cmd_setup(args: argparse.Namespace) -> int:
+    from . import wizard
+
+    return wizard.run(args)
+
+
+def cmd_service(args: argparse.Namespace) -> int:
+    from . import service
+
+    if args.action == "status":
+        print(json.dumps(service.status(), indent=2))
+        return 0
+    try:
+        notes = service.install() if args.action == "install" else service.uninstall()
+    except RuntimeError as exc:
+        print(f"[FAILED] {exc}", file=sys.stderr)
+        return 1
+    for note in notes:
+        print(f"[ok] {note}")
+    return 0
+
+
+def _flatten(cfg: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
+    flat: Dict[str, Any] = {}
+    for key, value in cfg.items():
+        name = f"{prefix}{key}"
+        if isinstance(value, dict):
+            flat.update(_flatten(value, name + "."))
+        else:
+            flat[name] = value
+    return flat
+
+
+def _coerce(key: str, raw: str) -> Any:
+    """Parse ``raw`` as the type of ``key``'s default; ValueError if impossible."""
+    from .config import DEFAULT_CONFIG
+
+    defaults = _flatten(DEFAULT_CONFIG)
+    defaults.setdefault("daemon_python", "")
+    if key not in defaults:
+        raise ValueError(f"unknown setting {key!r}; see: subcortex config show")
+    default = defaults[key]
+    if isinstance(default, bool):
+        lowered = raw.strip().lower()
+        if lowered in ("1", "true", "yes", "on"):
+            return True
+        if lowered in ("0", "false", "no", "off"):
+            return False
+        raise ValueError(f"{key} takes true/false")
+    if isinstance(default, (int, float)):
+        try:
+            return type(default)(raw)
+        except ValueError:
+            raise ValueError(f"{key} takes a number") from None
+    if key == "backend" and raw not in ("laya", "jev"):
+        raise ValueError("backend is laya or jev")
+    return raw
+
+
+def _set_dotted(key: str, value: Any) -> None:
+    from .config import save_config
+
+    update: Dict[str, Any] = {}
+    node = update
+    parts = key.split(".")
+    for part in parts[:-1]:
+        node = node.setdefault(part, {})
+    node[parts[-1]] = value
+    save_config(update)
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    from .config import config_path, secrets_path, unset_config
+
+    action = args.action or "show"
+    cfg = load_config()
+    flat = _flatten(cfg)
+    if action == "show":
+        print(f"# {config_path()}  (defaults < file < SUBCORTEX_* env)")
+        for key, value in sorted(flat.items()):
+            print(f"{key} = {json.dumps(value)}")
+        if secrets_path().is_file():
+            try:
+                names = sorted(json.loads(secrets_path().read_text()))
+            except (OSError, ValueError):
+                names = []
+            print(f"# secrets stored in {secrets_path()}: {', '.join(names) or 'none'}")
+        return 0
+    if action == "get":
+        if args.key not in flat:
+            print(f"unknown setting {args.key!r}", file=sys.stderr)
+            return 2
+        print(json.dumps(flat[args.key]))
+        return 0
+    if action == "set":
+        if args.value is None:
+            print("usage: subcortex config set <key> <value>", file=sys.stderr)
+            return 2
+        try:
+            value = _coerce(args.key, args.value)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        _set_dotted(args.key, value)
+        print(f"{args.key} = {json.dumps(value)}")
+        return 0
+    if action == "unset":
+        print(f"{args.key} reverted to default" if unset_config(args.key) else f"{args.key} was not set")
+        return 0
+    # edit: interactive
+    from .ui import UI, Cancelled
+
+    ui = UI()
+    if not ui.interactive:
+        print("config edit needs a terminal; use: subcortex config set <key> <value>", file=sys.stderr)
+        return 2
+    try:
+        while True:
+            flat = _flatten(load_config())
+            options = [(k, k, json.dumps(v)) for k, v in sorted(flat.items())] + [(None, "done", "")]
+            key = ui.choose("Change which setting?", options, len(options) - 1)
+            if key is None:
+                return 0
+            while True:
+                raw = ui.ask(key, json.dumps(flat[key]).strip('"'))
+                try:
+                    _set_dotted(key, _coerce(key, raw))
+                    break
+                except ValueError as exc:
+                    ui.warn(str(exc))
+    except Cancelled:
+        return 130
+
+
 def cmd_mcp(args: argparse.Namespace) -> int:
     from . import mcp_server
     mcp_server.serve()
@@ -397,6 +556,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p_setup = sub.add_parser("setup", help="interactive setup: backend, behaviors, TUIs, daemon")
+    p_setup.add_argument("--yes", "-y", action="store_true", help="accept every default (unattended)")
+    p_setup.add_argument("--backend", choices=["laya", "jev"])
+    p_setup.add_argument("--model", choices=["multilingual", "english", "typed-decisions"])
+    p_setup.add_argument("--tuis", nargs="+", metavar="TUI",
+                         help="TUIs to wire (names, 'detected', 'all' or 'none'); default: ask / detected")
+    p_setup.add_argument("--mcp", action="store_true", help="also register the MCP server where supported")
+    p_setup.add_argument("--service", dest="service", action="store_true", default=None,
+                         help="start the daemon at login")
+    p_setup.add_argument("--no-service", dest="service", action="store_false")
+    p_setup.add_argument("--skip-backend-install", action="store_true",
+                         help="don't install the laya package")
+    p_setup.add_argument("--ignore-version", action="store_true", help=argparse.SUPPRESS)
+    p_setup.set_defaults(func=cmd_setup)
+
 
     p_serve = sub.add_parser("serve", help="run the daemon (background by default)")
     p_serve.add_argument("--foreground", action="store_true",
@@ -451,6 +626,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_wrap.add_argument("command", nargs=argparse.REMAINDER, help="-- <command> [args...]")
     p_wrap.set_defaults(func=cmd_wrap)
 
+    p_service = sub.add_parser("service", help="start the daemon at login (launchd / systemd --user)")
+    p_service.add_argument("action", choices=["install", "uninstall", "status"])
+    p_service.set_defaults(func=cmd_service)
+
+    p_config = sub.add_parser("config", help="show or change settings")
+    p_config.add_argument("action", nargs="?", choices=["show", "get", "set", "unset", "edit"])
+    p_config.add_argument("key", nargs="?")
+    p_config.add_argument("value", nargs="?")
+    p_config.set_defaults(func=cmd_config)
+
     p_mcp = sub.add_parser("mcp", help="run the stdio MCP server")
     p_mcp.set_defaults(func=cmd_mcp)
 
@@ -465,7 +650,14 @@ def main(argv: Optional[list] = None) -> int:
         from .hook import main as hook_main
 
         return hook_main(argv[1:])
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    if not argv:
+        parser.print_help()
+        print("\nGet started: subcortex setup")
+        return 0
+    args = parser.parse_args(argv)
+    if args.command == "config" and args.action in ("get", "set", "unset") and not args.key:
+        parser.error(f"config {args.action} needs a key")
     try:
         return int(args.func(args))
     except KeyboardInterrupt:

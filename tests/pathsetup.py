@@ -13,3 +13,6 @@ import os  # noqa: E402
 # Hooks start a missing daemon by default; tests (and the subprocesses they
 # spawn with a copy of this environment) must never do that.
 os.environ["SUBCORTEX_AUTOSTART"] = "0"
+
+# Never read the developer's real ~/.config/subcortex (config or secrets).
+os.environ.setdefault("SUBCORTEX_CONFIG", "/nonexistent/subcortex-tests/config.json")

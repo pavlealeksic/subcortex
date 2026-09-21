@@ -37,7 +37,7 @@ from .backends import get_backend
 from .backends.base import DecisionBackend
 from .config import DATA_DIR, LOCK_PATH, LOG_PATH, PID_PATH, load_config
 from .metrics import METRICS
-from . import policy, verdicts
+from . import __version__, policy, verdicts
 
 BackendFactory = Callable[..., DecisionBackend]
 
@@ -94,6 +94,7 @@ def make_handler(state: Any):
                 cfg = state.config
                 self._send_json(200, {
                     "ok": True,
+                    "version": __version__,
                     "backend": cfg.get("backend", "laya"),
                     "model": cfg.get("model") if cfg.get("backend", "laya") == "laya"
                              else (cfg.get("jev") or {}).get("model"),
@@ -254,8 +255,10 @@ def run(port: Optional[int] = None, config: Optional[Dict[str, Any]] = None) -> 
     cfg = config or load_config()
     lock_fd = _acquire_lock()
     if lock_fd is None:
+        # Another instance is serving: not an error (a login service must not
+        # restart-loop because a hook already started the daemon).
         print(f"subcortex daemon already running (lock: {LOCK_PATH})", file=sys.stderr)
-        return 1
+        return 0
     server = create_server(int(port or cfg["port"]), cfg)
     server.log_path = str(LOG_PATH)
     PID_PATH.write_text(str(os.getpid()))

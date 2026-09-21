@@ -27,6 +27,8 @@ import urllib.request
 from typing import Any, Callable, Dict, Tuple
 from urllib.parse import urlsplit, urlunsplit
 
+from ..config import read_secret
+
 Transport = Callable[[str, bytes, Dict[str, str], float], Tuple[int, str]]
 
 DEFAULT_BASE_URL = "https://api.typesafe.ai/v1"
@@ -261,21 +263,21 @@ class JevBackend:
             _check_url(url)
         except BackendUnavailableError as exc:
             return False, f"jev misconfigured: {exc}"
-        if not os.environ.get(self.api_key_env, "").strip():
+        if not read_secret(self.api_key_env):
             return False, (
                 f"jev API key not configured ({self.api_key_env} is not set). "
-                f"Fix: export {self.api_key_env}=..."
+                f"Fix: export {self.api_key_env}=... or run: subcortex setup"
             )
         return True, f"jev configured ({url}, model {self.model!r})"
 
     # -- inference ----------------------------------------------------------------
 
     def _api_key(self) -> str:
-        key = os.environ.get(self.api_key_env, "").strip()
+        key = read_secret(self.api_key_env)
         if not key:
             raise BackendUnavailableError(
                 f"jev API key not configured ({self.api_key_env} is not set). "
-                f"Fix: export {self.api_key_env}=..."
+                f"Fix: export {self.api_key_env}=... or run: subcortex setup"
             )
         return key
 

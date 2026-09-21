@@ -57,13 +57,35 @@ tool call, so subcortex doesn't try. Per-TUI details, config paths and caveats:
 ## Install
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/pavlealeksic/subcortex/main/install.sh | sh
+```
+
+That installs the CLI into its own environment (uv, pipx or a private venv)
+and starts **`subcortex setup`**, an interactive walk-through:
+
+1. **Backend** — Laya (local; installs `laya-mlx`/`laya` into a dedicated
+   environment and downloads the model) or Jev (hosted; your API key is kept in
+   the environment or in a mode-600 file).
+2. **Behaviors** — prompt hints, output trimming, compaction snapshots.
+3. **TUIs** — a checklist of every supported TUI, with the ones found on this
+   machine preselected.
+4. **Review** — each file that will change, with its diff on request; every
+   install self-tests its hook commands before writing.
+5. **Daemon** — start it now, and optionally at login (launchd / systemd).
+
+Arrow keys and space in a terminal; plain numbered prompts elsewhere. Run it
+again any time to change your choices; `subcortex setup --yes --backend jev
+--tuis detected` runs it unattended. Or install by hand:
+
+```sh
 pip install subcortex            # daemon + jev backend (zero dependencies)
 pip install "subcortex[laya]"    # + local laya backend
 ```
 
-## Wire it into a TUI
+## Wire it into a TUI (without the wizard)
 
 ```sh
+subcortex install                         # checklist of TUIs (in a terminal)
 subcortex tuis                            # supported TUIs, what's installed, what's on PATH
 subcortex install claude-code --dry-run   # show exactly what would change
 subcortex install claude-code             # shows the diff, asks, self-tests, writes
@@ -103,10 +125,13 @@ exited 2 from a Claude Code hook, and exit 2 means "block this prompt". So:
   Cortex Code also execute hooks from `~/.claude/settings.json`; the Claude
   Code adapter recognises foreign payloads and stays silent.
 
-## Daemon
+## Daemon & settings
 
 ```sh
-subcortex doctor                 # check config, backend, daemon
+subcortex doctor                 # check config, backend, daemon, installed hooks
+subcortex config                 # show every setting (config edit: interactive)
+subcortex config set thresholds.min_output_chars 8000
+subcortex service install        # start the daemon at login (launchd / systemd --user)
 subcortex serve                  # start the background daemon (127.0.0.1:7707)
 subcortex stats                  # counters + uptime
 subcortex serve --stop

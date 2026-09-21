@@ -136,6 +136,26 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
     return cfg
 
 
+def unset_config(dotted: str) -> bool:
+    """Remove one key (``section.key``) from config.json, reverting it to its default."""
+    path = config_path()
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    parts = dotted.split(".")
+    node = data
+    for part in parts[:-1]:
+        node = node.get(part) if isinstance(node, dict) else None
+        if not isinstance(node, dict):
+            return False
+    if parts[-1] not in node:
+        return False
+    del node[parts[-1]]
+    path.write_text(json.dumps(data, indent=2) + "\n")
+    return True
+
+
 def save_config(updates: Dict[str, Any]) -> Path:
     """Merge *updates* into config.json (preserving other keys) and return the path."""
     path = config_path()
@@ -151,3 +171,58 @@ def save_config(updates: Dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n")
     return path
+
+
+# -- secrets ---------------------------------------------------------------------------------
+#
+# API keys may live in the environment (preferred) or, for daemons started
+# outside the user's shell (by a TUI hook or at login), in secrets.json next to
+# the config file — created with mode 0600 and never printed.
+
+
+def secrets_path() -> Path:
+    return config_path().parent / "secrets.json"
+
+
+def _read_secrets() -> Dict[str, str]:
+    try:
+        data = json.loads(secrets_path().read_text())
+    except (OSError, ValueError):
+        return {}
+    return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+
+def read_secret(name: str) -> Optional[str]:
+    """``$name`` if set, else the value stored in secrets.json, else None."""
+    value = os.environ.get(name, "").strip()
+    return value or _read_secrets().get(name) or None
+
+
+def _write_secrets(data: Dict[str, str]) -> Path:
+    path = secrets_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(json.dumps(data, indent=2) + "\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+    return path
+
+
+def save_secret(name: str, value: str) -> Path:
+    data = _read_secrets()
+    data[name] = value
+    return _write_secrets(data)
+
+
+def delete_secret(name: str) -> bool:
+    data = _read_secrets()
+    if name not in data:
+        return False
+    del data[name]
+    if data:
+        _write_secrets(data)
+    else:
+        secrets_path().unlink()
+    return True

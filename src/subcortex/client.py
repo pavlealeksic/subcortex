@@ -52,14 +52,15 @@ class DaemonClient:
         if not self.autostart:
             return
         try:
-            from .config import VENV_PYTHON, data_dir
+            from .config import data_dir
+            from .provision import daemon_python
 
             stamp = data_dir() / "autostart.stamp"
             if stamp.exists() and time.time() - stamp.stat().st_mtime < AUTOSTART_INTERVAL_S:
                 return
             stamp.parent.mkdir(parents=True, exist_ok=True)
             stamp.touch()
-            python = str(VENV_PYTHON) if VENV_PYTHON.exists() else sys.executable
+            python = daemon_python()
             with open(data_dir() / "daemon.log", "ab") as log:
                 subprocess.Popen([python, "-m", "subcortex", "serve", "--foreground"],
                                  stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
