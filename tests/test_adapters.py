@@ -170,6 +170,30 @@ class TestClaudeCode(AdapterCase):
         self.assertIsNone(self.run_hook("claude-code", "UserPromptSubmit", payload, Down()))
 
 
+class TestCodexExitStatus(AdapterCase):
+    """Codex's PostToolUse has no exit code; the session log has, and failures are never trimmed."""
+
+    def rollout(self, call_id, code, status):
+        item = {"type": "CommandExecution", "id": call_id, "exit_code": code, "status": status}
+        self.transcript.write_text(json.dumps({"type": "event_msg", "payload": {"type": "item_completed",
+                                                                                 "item": item}}) + "\n")
+
+    def payload(self, call_id):
+        return dict(self.sample("codex", "PostToolUse"), tool_use_id=call_id, transcript_path=str(self.transcript))
+
+    def test_failed_command_is_kept_and_success_keeps_its_exit_line(self):
+        from subcortex.adapters import get_adapter
+
+        adapter = get_adapter("codex")
+        self.rollout("call_9", 3, "failed")
+        self.assertTrue(adapter.parse("PostToolUse", "tool_output", self.payload("call_9")).failed)
+        self.rollout("call_9", 0, "completed")
+        event = adapter.parse("PostToolUse", "tool_output", self.payload("call_9"))
+        self.assertFalse(event.failed)
+        self.assertTrue(adapter.render_tool_output(event, "trimmed")["reason"].startswith("Process exited with code 0"))
+        self.assertIsNone(adapter.parse("PostToolUse", "tool_output", self.payload("other")).extra["exit_code"])
+
+
 class TestTaskEvidence(AdapterCase):
     def test_the_prompt_is_remembered_and_sent_with_the_output(self):
         client = FakeClient()

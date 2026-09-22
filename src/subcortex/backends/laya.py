@@ -23,7 +23,7 @@ import sys
 import threading
 from typing import Any, Dict, Tuple
 
-from ..config import VENV_PIP
+from ..config import venv_pip
 
 _BACKENDS = ("mlx", "torch")
 _MODULES = {"mlx": "laya_mlx", "torch": "laya"}
@@ -69,8 +69,8 @@ def _module_available(module: str) -> bool:
 
 
 def _install_hint(package: str) -> str:
-    if VENV_PIP.exists():
-        return f"run: {VENV_PIP} install {package}"
+    if venv_pip().exists():
+        return f"run: {venv_pip()} install {package}"
     return f"run: {sys.executable} -m pip install {package}"
 
 

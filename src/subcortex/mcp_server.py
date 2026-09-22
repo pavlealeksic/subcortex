@@ -72,14 +72,17 @@ _TOOLS = [
 
 
 def _ensure_daemon() -> None:
-    """Start the daemon on first use if it isn't running (best effort)."""
+    """Start the daemon on first use if it isn't running (best effort; honors
+    hooks.autostart_daemon, and waits less than MCP clients' ~10 s timeout)."""
     from . import cli
     from .config import load_config
 
     cfg = load_config()
+    if not (cfg.get("hooks") or {}).get("autostart_daemon", True):
+        return
     if cli._health(cfg) is None:
         cli._spawn_daemon(cfg)
-        cli._wait_for_health(cfg)
+        cli._wait_for_health(cfg, timeout_s=8.0)
 
 
 def _post(path: str, body: Dict[str, Any]) -> Dict[str, Any]:

@@ -106,4 +106,5 @@ class OpenInterpreterInstaller(_CodexEngineInstaller):
     post_install = TRUST.format(name="interpreter")
 
     def home(self) -> Path:
-        return Path.home() / ".openinterpreter"
+        override = os.environ.get("INTERPRETER_HOME", "").strip()
+        return Path(override).expanduser() if override else Path.home() / ".openinterpreter"

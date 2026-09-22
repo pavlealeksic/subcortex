@@ -19,9 +19,8 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 from . import __version__
-from .config import DATA_DIR, VENV_PYTHON
+from .config import venv_dir, venv_python
 
-VENV_DIR = DATA_DIR / "venv"
 
 
 def apple_silicon() -> bool:
@@ -44,21 +43,26 @@ def daemon_python() -> str:
     chosen = str(load_config().get("daemon_python") or "").strip()
     if chosen and os.access(chosen, os.X_OK):
         return chosen
-    return str(VENV_PYTHON) if VENV_PYTHON.exists() else sys.executable
+    return str(venv_python()) if venv_python().exists() else sys.executable
 
 
 def daemon_argv(python: Optional[str] = None) -> List[str]:
-    """How to start the daemon. Isolated (``-I``): PYTHONPATH and friends are
-    ignored and the working directory never lands on sys.path, so a project's
-    own ``json.py`` can't break the daemon or run inside it. Callers also start
-    it from the data dir, never the user's project."""
+    """How to start the daemon.
+
+    - Isolated (``-I``): PYTHONPATH and friends are ignored and the working
+      directory never lands on sys.path, so a project's own ``json.py`` can't
+      break the daemon or run inside it. Callers also start it from the data
+      dir, never the user's project.
+    - It runs *this* subcortex, whatever the interpreter: the backend venv may
+      hold an older copy of the package (a daemon of another version would
+      disagree with the hooks). The package is loaded from its own directory,
+      which then leaves sys.path again so the venv still provides the model.
+    """
     python = python or daemon_python()
-    root = source_checkout()
-    if root:  # dev checkout: run this code, whatever the interpreter
-        boot = (f"import sys; sys.path.insert(0, {str(root / 'src')!r}); "
-                "from subcortex.cli import main; sys.exit(main(['serve', '--foreground']))")
-        return [python, "-I", "-c", boot]
-    return [python, "-I", "-m", "subcortex", "serve", "--foreground"]
+    root = str(Path(__file__).resolve().parent.parent)
+    boot = (f"import sys; sys.path.insert(0, {root!r}); import subcortex; sys.path.remove({root!r}); "
+            "from subcortex.cli import main; sys.exit(main(['serve', '--foreground']))")
+    return [python, "-I", "-c", boot]
 
 
 def source_checkout() -> Optional[Path]:
@@ -131,8 +135,8 @@ def backend_ready(python: str) -> Tuple[bool, str]:
 
 def venv_is_foreign() -> Optional[str]:
     """If the venv path is a symlink (e.g. into another project's env), its target."""
-    if VENV_DIR.is_symlink():
-        return os.readlink(VENV_DIR)
+    if venv_dir().is_symlink():
+        return os.readlink(venv_dir())
     return None
 
 
@@ -140,17 +144,17 @@ def create_venv(replace: bool = False) -> Tuple[bool, str]:
     """Create the dedicated venv. ``replace`` drops a symlink/broken env first —
     a symlink is only unlinked, never followed."""
     try:
-        if VENV_DIR.is_symlink():
+        if venv_dir().is_symlink():
             if not replace:
-                return False, f"{VENV_DIR} is a symlink to {os.readlink(VENV_DIR)}"
-            VENV_DIR.unlink()
-        elif VENV_DIR.exists() and replace:
-            shutil.rmtree(VENV_DIR)
-        if not VENV_PYTHON.exists():
-            VENV_DIR.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)], check=True,
+                return False, f"{venv_dir()} is a symlink to {os.readlink(venv_dir())}"
+            venv_dir().unlink()
+        elif venv_dir().exists() and replace:
+            shutil.rmtree(venv_dir())
+        if not venv_python().exists():
+            venv_dir().parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run([sys.executable, "-m", "venv", str(venv_dir())], check=True,
                            capture_output=True, text=True, timeout=300)
-        return True, str(VENV_DIR)
+        return True, str(venv_dir())
     except subprocess.CalledProcessError as exc:
         return False, (exc.stderr or exc.stdout or str(exc)).strip()[-500:]
     except Exception as exc:

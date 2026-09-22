@@ -155,7 +155,7 @@ class Wizard:
             if getattr(self.args, "skip_backend_install", False):
                 self.next_steps.append("install the laya backend: subcortex setup")
                 return
-            options = [("dedicated", "Install into subcortex's own environment", f"{provision.VENV_DIR} · recommended"),
+            options = [("dedicated", "Install into subcortex's own environment", f"{provision.venv_dir()} · recommended"),
                        ("current", "Install into this Python", sys.executable),
                        ("skip", "Skip for now", "hooks pass through until the backend is installed")]
             where = self.choose(f"Where should {provision.laya_package()} go?", options, 0)
@@ -165,7 +165,7 @@ class Wizard:
             if where == "dedicated":
                 foreign = provision.venv_is_foreign()
                 if foreign:
-                    ui.info(f"{provision.VENV_DIR} links to {foreign}.")
+                    ui.info(f"{provision.venv_dir()} links to {foreign}.")
                     ui.dim("It will be replaced by a dedicated environment; the linked one is left untouched.")
                     if not self.confirm("Replace the link?", True):
                         self.next_steps.append("install the laya backend: subcortex setup")
@@ -176,7 +176,7 @@ class Wizard:
                     ui.error(f"could not create the environment: {message}")
                     self.next_steps.append("install the laya backend: subcortex setup")
                     return
-                python = str(provision.VENV_PYTHON)
+                python = str(provision.venv_python())
             else:
                 python = sys.executable
             with ui.spinner(f"installing {provision.laya_package()} and subcortex (a few minutes the first time)"):

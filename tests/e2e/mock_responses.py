@@ -45,7 +45,9 @@ class MockResponses:
         with self.lock:
             if not body.get("tools") or not self.script:
                 return {"text": "OK"}
-            return self.script.pop(0)
+            turn = self.script.pop(0)
+        # A callable turn sees the request first (e.g. to pick the shell tool this version offers).
+        return turn(body) if callable(turn) else turn
 
     def agent_requests(self) -> List[Dict[str, Any]]:
         return [r["body"] for r in self.requests if r["body"].get("tools")]

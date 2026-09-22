@@ -15,7 +15,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Tuple
 
 from .base import InstallError, Installer, Target
 
@@ -51,7 +51,37 @@ def _entry_lines(argv: List[str], indent: str) -> List[str]:
     ]
 
 
+def _unmarked_entry(text: str) -> Optional[Tuple[int, int]]:
+    """Line range of an ``extensions.subcortex`` entry without our markers.
+
+    Goose rewrites config.yaml with serde_yaml (plugin discovery, ``goose
+    configure``, toggling an extension), which drops comments, so an entry we
+    wrote can outlive its markers. A second ``subcortex:`` key next to it would
+    make the file invalid for Goose, which then starts from an empty config.
+    """
+    lines = text.splitlines()
+    in_extensions = False
+    for i, line in enumerate(lines):
+        if line.strip() and not line[0].isspace() and not line.startswith("#"):
+            in_extensions = line.split(":", 1)[0].strip() == "extensions"
+            continue
+        match = re.match(r"^([ \t]+)subcortex:\s*(#.*)?$", line)
+        if in_extensions and match:
+            indent = len(match.group(1))
+            end = i + 1
+            while end < len(lines) and (not lines[end].strip()
+                                        or len(lines[end]) - len(lines[end].lstrip()) > indent):
+                end += 1
+            if any(re.match(r"^\s+cmd:.*subcortex", l) for l in lines[i + 1:end]):
+                return i, end
+    return None
+
+
 def strip_entry(text: str) -> str:
+    unmarked = _unmarked_entry(text) if "# >>> subcortex" not in text else None
+    if unmarked:
+        lines = text.splitlines(keepends=True)
+        text = "".join(lines[:unmarked[0]] + lines[unmarked[1]:])
     lines_in = text.splitlines()
     begins = [i for i, l in enumerate(lines_in) if l.strip().startswith("# >>> subcortex")]
     if begins and not any(l.strip().startswith(END) for l in lines_in[begins[0] + 1:]):
@@ -143,8 +173,11 @@ class GooseInstaller(Installer):
             return _validate(insert_entry(text, argv), expect_ours=True)
 
         def unmerge(text: str) -> str:
-            if "# >>> subcortex" not in text:
+            if not installed(text):
                 return text
             return _validate(strip_entry(text), expect_ours=False)
 
-        return [Target(goose_config(), merge, unmerge, lambda t: "# >>> subcortex" in t)]
+        def installed(text: str) -> bool:
+            return "# >>> subcortex" in text or _unmarked_entry(text) is not None
+
+        return [Target(goose_config(), merge, unmerge, installed)]

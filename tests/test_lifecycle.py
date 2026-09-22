@@ -70,16 +70,24 @@ class Sandbox(unittest.TestCase):
         return "\n".join(parts)
 
     def stop_daemon(self):
+        """Whatever a test started must not outlive it (health pid or sandbox PID file)."""
+        pids = set()
         health = self.health()
-        if health and health.get("pid"):
+        if health and isinstance(health.get("pid"), int):
+            pids.add(health["pid"])
+        try:
+            pids.add(int((self.data / "daemon.pid").read_text().strip()))
+        except (OSError, ValueError):
+            pass
+        for pid in pids:
             try:
-                os.kill(health["pid"], signal.SIGTERM)
-            except ProcessLookupError:
+                os.kill(pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
                 pass
-            for _ in range(50):
-                if not self.health():
-                    break
-                time.sleep(0.1)
+        for _ in range(50):
+            if not self.health():
+                break
+            time.sleep(0.1)
 
 
 class TestAutostart(Sandbox):
@@ -135,6 +143,26 @@ class TestStop(Sandbox):
         proc = self.start()
         self.assertEqual(cli._stop_daemon(), 0)
         self.assertEqual(proc.wait(timeout=10), 0)
+
+
+class TestCurrentCodeOnly(unittest.TestCase):
+    def test_an_older_subcortex_in_the_backend_venv_is_never_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            venv = Path(tmp, "venv")
+            subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True, timeout=60)
+            site = next(venv.glob("lib/python*/site-packages"))
+            (site / "subcortex").mkdir()
+            (site / "subcortex" / "__init__.py").write_text('__version__ = "0.0.1-stale"\n')
+            argv = provision.daemon_argv(str(venv / "bin" / "python"))
+            self.assertEqual(argv[1], "-I")
+            prefix = argv[-1].split("from subcortex.cli")[0]
+            probe = prefix + "import subcortex.policy, sys; print(subcortex.__version__, subcortex.__file__)"
+            out = subprocess.run([argv[0], "-I", "-c", probe], capture_output=True, text=True, timeout=60,
+                                 cwd=tmp).stdout
+        from subcortex import __version__
+
+        self.assertTrue(out.startswith(__version__ + " "), out)
+        self.assertNotIn(str(site), out)
 
 
 class TestServiceUnits(unittest.TestCase):

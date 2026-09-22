@@ -121,7 +121,7 @@ def run(tui: str, event_name: Optional[str], raw: str,
     elif kind == TOOL_OUTPUT:
         replacement = policy.trim_output(
             event.output, cfg, client.judge, event.tool, event.tool_input, event.failed,
-            task=policy.last_prompt(event.session_id, tui=adapter.name))
+            task=event.extra.get("task") or policy.last_prompt(event.session_id, tui=adapter.name))
         # Some TUIs can only deliver restored context alongside a tool result.
         context = adapter.output_context(event, cfg)
         if context:

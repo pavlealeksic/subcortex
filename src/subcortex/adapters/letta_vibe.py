@@ -14,9 +14,35 @@ allowed for this adapter's tool-output event only. Failed calls
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, Optional
 
+from ..transcript import _entries, message_from_entry
 from .base import PROMPT, TOOL_OUTPUT, HookAdapter, HookEvent, Response
+
+
+def turn_request(transcript_path: Any) -> str:
+    """The user request of the turn in progress, from Vibe's messages.jsonl.
+
+    Vibe rewrites that log after every LLM step, so once a turn is past its
+    first step the log ends with that step's tool results and its last
+    (non-injected) user message is the current request. At a turn's first
+    step the log still ends with the previous turn, whose request is not
+    this one's evidence: "" then (the output is kept).
+    """
+    try:
+        if not isinstance(transcript_path, str) or not transcript_path:
+            return ""
+        entries = [e for e in _entries(Path(transcript_path)) if isinstance(e, dict)]
+    except Exception:
+        return ""
+    if not entries or entries[-1].get("role") != "tool":
+        return ""
+    for entry in reversed(entries):
+        if entry.get("role") == "user" and not entry.get("injected"):
+            message = message_from_entry(entry)
+            return message["text"] if message else ""
+    return ""
 
 
 class LettaAdapter(HookAdapter):
@@ -50,6 +76,7 @@ class VibeAdapter(HookAdapter):
         if payload.get("tool_status") != "success" or not isinstance(text, str):
             return event
         event.output = text
+        event.extra["task"] = turn_request(payload.get("transcript_path"))
         event.tool = str(payload.get("tool_name") or "bash")
         event.tool_input = payload.get("tool_input")
         return event

@@ -110,6 +110,31 @@ class TestVersionDetection(unittest.TestCase):
             self.assertIn("without running it", warning)
 
 
+class TestGooseRewritesItsConfig(InstallerCase):
+    """Goose re-serializes config.yaml (dropping comments, i.e. our markers)."""
+
+    def test_an_unmarked_entry_is_still_ours(self):
+        installer = installers.get_installer("goose")
+        self.install(installer)
+        config = installer.targets()[0].path
+        text = config.read_text()
+        cmd = next(line for line in text.splitlines() if "cmd:" in line)
+        rewritten = ("GOOSE_PROVIDER: openai\nextensions:\n  myext:\n    enabled: true\n    type: builtin\n"
+                     f"  subcortex:\n    enabled: true\n{cmd}\n    type: stdio\nGOOSE_MODEL: gpt-5\n")
+        config.write_text(rewritten)  # what Goose writes back: same entry, no markers
+        self.assertTrue(installer.status()["installed"])
+        again = self.install(installer)
+        self.assertTrue(again.ok, again.messages)
+        keys = [l for l in config.read_text().splitlines() if l.strip() == "subcortex:"]
+        self.assertEqual(len(keys), 1)  # never a duplicate key (Goose would reset the whole file)
+        self.assertIn("myext:", config.read_text())
+        installer.uninstall()
+        after = config.read_text()
+        self.assertNotIn("subcortex", after)
+        for kept in ("GOOSE_PROVIDER: openai", "myext:", "GOOSE_MODEL: gpt-5"):
+            self.assertIn(kept, after)
+
+
 class TestConcurrentEdits(InstallerCase):
     def test_a_change_the_tui_makes_during_install_is_kept(self):
         installer = installers.get_installer("claude-code")

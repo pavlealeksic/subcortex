@@ -33,11 +33,6 @@ from typing import Any, Dict, Optional
 
 CONFIG_PATH = Path.home() / ".config" / "subcortex" / "config.json"
 
-# The backend venv. Daemon lock/PID/log and session state are resolved per call
-# under data_dir() (SUBCORTEX_DATA_DIR overrides it).
-DATA_DIR = Path.home() / ".local" / "share" / "subcortex"
-VENV_PYTHON = DATA_DIR / "venv" / "bin" / "python"
-VENV_PIP = DATA_DIR / "venv" / "bin" / "pip"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "backend": "laya",
@@ -96,6 +91,19 @@ def data_dir() -> Path:
     """Runtime state dir, resolved per call so tests can redirect HOME."""
     override = os.environ.get("SUBCORTEX_DATA_DIR", "").strip()
     return Path(override) if override else Path.home() / ".local" / "share" / "subcortex"
+
+
+def venv_dir() -> Path:
+    """The dedicated backend environment (laya), under the data dir."""
+    return data_dir() / "venv"
+
+
+def venv_python() -> Path:
+    return venv_dir() / "bin" / "python"
+
+
+def venv_pip() -> Path:
+    return venv_dir() / "bin" / "pip"
 
 
 def lock_path() -> Path:
