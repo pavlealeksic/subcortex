@@ -23,17 +23,26 @@ _TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
 # Harness-injected pseudo-messages such as <environment_context>…
 _INJECTED_RE = re.compile(r"<[a-z][\w-]*(?:\s[^>]*)?>", re.IGNORECASE)  # matched on stripped text
 _INJECTED_PREFIXES = ("# AGENTS.md instructions",)  # Codex
-# ...except wrappers around the user's own words (Cursor: <user_query>).
-_USER_WRAPPERS = ("user_query", "user_message")
+# ...except wrappers around the user's own words (Cursor: <user_query>,
+# Cline: <user_input mode="act">).
+_USER_WRAPPERS = ("user_query", "user_message", "user_input")
 
 
 def _unwrap_user(text: str) -> Optional[str]:
-    """The words inside <user_query>…</user_query>, else None. Plain string
-    operations: a regex here backtracked cubically on long whitespace runs."""
+    """The words inside <user_query>…</user_query> (attributes allowed), else
+    None. Plain string operations: a regex here backtracked cubically on long
+    whitespace runs."""
     for tag in _USER_WRAPPERS:
-        opening, closing = f"<{tag}>", f"</{tag}>"
-        if text.startswith(opening) and text.endswith(closing) and len(text) >= len(opening) + len(closing):
-            return text[len(opening):len(text) - len(closing)].strip()
+        opening, closing = f"<{tag}", f"</{tag}>"
+        if not (text.startswith(opening) and text.endswith(closing)):
+            continue
+        rest = text[len(opening):]
+        if not rest or rest[0] not in "> \t\n":
+            continue  # a different tag that merely starts the same way
+        end = rest.find(">")
+        if end == -1 or end > len(rest) - len(closing):
+            continue
+        return rest[end + 1:len(rest) - len(closing)].strip()
     return None
 
 

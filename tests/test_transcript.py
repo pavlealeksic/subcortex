@@ -77,6 +77,18 @@ class TestShapes(unittest.TestCase):
             msgs = transcript.last_messages(path, limit=2)
         self.assertTrue(msgs[-1]["text"].startswith("line 7999"))
 
+    def test_user_wrappers_with_attributes_are_unwrapped(self):
+        path = write([
+            {"role": "user", "content": [{"type": "text", "text": '<user_input mode="act">remember PELICAN-42</user_input>'}]},
+            {"role": "user", "content": "<user_query>\n  fix the parser\n</user_query>"},
+            {"role": "user", "content": "<user_inputs>not ours</user_inputs>"},
+            {"role": "user", "content": "<environment_context>cwd</environment_context>"},
+        ])
+        self.assertEqual(transcript.last_messages(path), [
+            {"role": "user", "text": "remember PELICAN-42"},
+            {"role": "user", "text": "fix the parser"},
+        ])
+
     def test_our_own_injected_context_is_never_snapshotted(self):
         from subcortex import policy
 

@@ -395,6 +395,16 @@ class _Server(ThreadingHTTPServer):
     log_path: Optional[str] = None
     log_requests = False
 
+    def server_bind(self) -> None:
+        # HTTPServer.server_bind resolves its own address (socket.getfqdn), a
+        # reverse-DNS lookup that can hang for many seconds on some machines.
+        # We only ever serve 127.0.0.1: skip it.
+        import socketserver
+
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "localhost"
+        self.server_port = self.server_address[1]
+
     def handle_error(self, request: Any, client_address: Any) -> None:
         # A client that gave up (hook budget spent) is normal, not an error.
         exc = sys.exc_info()[1]
@@ -459,6 +469,8 @@ def run(port: Optional[int] = None, config: Optional[Dict[str, Any]] = None) -> 
     """Run the daemon in the foreground. Holds the single-instance lock for the
     process lifetime; writes/removes the PID file; stops cleanly on SIGTERM."""
     cfg = config or load_config()
+    _append_log(str(log_path()), f"{time.strftime('%Y-%m-%d %H:%M:%S')} subcortex {__version__} "
+                                 f"starting (pid {os.getpid()}, port {port or cfg['port']})")
     lock_fd = _acquire_lock()
     if lock_fd is None:
         # Another instance is serving: not an error (a login service must not
@@ -472,7 +484,9 @@ def run(port: Optional[int] = None, config: Optional[Dict[str, Any]] = None) -> 
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())
     threading.Thread(target=_watch_version, args=(server,), daemon=True).start()
     actual_port = server.server_address[1]
-    print(f"subcortex daemon {__version__} listening on 127.0.0.1:{actual_port} (pid {os.getpid()})")
+    message = f"subcortex daemon {__version__} listening on 127.0.0.1:{actual_port} (pid {os.getpid()})"
+    _append_log(server.log_path, f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}")
+    print(message, flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
