@@ -72,7 +72,7 @@ def _unmarked_entry(text: str) -> Optional[Tuple[int, int]]:
             while end < len(lines) and (not lines[end].strip()
                                         or len(lines[end]) - len(lines[end].lstrip()) > indent):
                 end += 1
-            if any(re.match(r"^\s+cmd:.*subcortex", l) for l in lines[i + 1:end]):
+            if any(re.match(r"^\s+(?:cmd|args):.*subcortex", l) for l in lines[i + 1:end]):
                 return i, end
     return None
 

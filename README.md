@@ -39,9 +39,9 @@ Each TUI gets whichever of these its extension seam can safely support:
 | Codex CLI ≥ 0.133 | hooks (`/hooks` trust) | ✅ | ✅ `continue:false` + `reason` | ✅ |
 | Open Interpreter | hooks (Codex engine) | ✅ | ✅ | ✅ |
 | Qoder CLI | hooks | ✅ | ✅ | ✅ |
-| CodeBuddy Code | hooks | ✅ | ✅ | ✅ |
+| CodeBuddy Code | hooks | ✅ | — hook gets no output | ✅ on auto-compaction |
 | GitHub Copilot CLI ≥ 1.0.67 | hooks | ✅ | ✅ `modifiedResult` | ✅ restored with next prompt |
-| Factory Droid | hooks | ✅ | — can only append | ✅ |
+| Factory Droid | hooks | ✅ (not one-shot `exec`) | — can only append | ✅ |
 | Qwen Code ≥ 0.16 | hooks | ✅ | — truncates natively | ✅ |
 | Gemini CLI ≥ 0.27 | hooks | ✅ | — truncates natively | ◐ on `/compress` |
 | Cursor CLI | hooks | ✅ interactive | — Shell can't be replaced | ✅ restored with next prompt |
@@ -49,9 +49,9 @@ Each TUI gets whichever of these its extension seam can safely support:
 | OpenHands CLI ≥ 1.12 | hooks | ✅ | — truncates natively | ✅ via its event log |
 | Grok Build | hooks | — output discarded | ✅ tagged `updatedToolOutput` | ✅ restored on next shell call |
 | Docker Agent ≥ 1.137 | hooks | ✅ | ✅ `updated_tool_response` | ✅ restored with next prompt |
-| Mistral Vibe ≥ 2.25.5 | hooks | — no event | ✅ `post_tool` reason | — no event |
-| Letta Code | hooks | ✅ | — | — |
-| Junie CLI (EAP) | hooks | ✅ | — | — |
+| Mistral Vibe ≥ 2.25.5 | hooks | — no event | ✅ `post_tool` reason (from a turn's 2nd call) | — no event |
+| Letta Code | hooks | ✅ interactive | — | — |
+| Junie CLI | hooks | ✅ interactive | — | — |
 | Devin CLI | hooks | ✅ | — | — |
 | OpenCode ≥ 1.1.62 | plugin | ✅ | ✅ bash only | ✅ into the compaction prompt |
 | Kilo Code CLI | plugin | ✅ | ✅ | ✅ |
@@ -64,6 +64,18 @@ Each TUI gets whichever of these its extension seam can safely support:
 "—" means the TUI has no seam that can do it without blocking or failing a
 tool call, so subcortex doesn't try. Per-TUI details, config paths and caveats:
 [docs/tuis.md](docs/tuis.md).
+
+**Verified end to end** — each real TUI binary, sandboxed, against a mock model
+API, asserting on what it actually sent to the model: Claude Code 2.1.278,
+Codex 0.155.1, Open Interpreter 0.0.45, Gemini CLI 0.60.0, Qwen Code 0.24.3,
+Kimi Code 2.0.2, OpenCode 1.18.31, Grok Build 1.0.40, Pi 0.87.0, Cline 3.0.62,
+Docker Agent 1.142.0, Mistral Vibe 2.25.5, Factory Droid 0.224.0, Copilot CLI
+1.0.87, OpenHands 1.16.0, Letta Code 0.32.15, CodeBuddy 2.156.0, Junie 26.9.21,
+Devin CLI 3000.11.1, Cursor CLI 2026.09.18, Amp (plugin runtime), and the MCP
+integrations of Crush 0.96.1, Goose 1.51.0 and Auggie 0.36.0. Qoder and Kiro
+need a vendor login to run at all; their hook/MCP formats were checked against
+their shipped code. Settings for MCP servers belong in `config.json`: some
+TUIs (Auggie) start MCP servers without your environment variables.
 
 ## Install
 

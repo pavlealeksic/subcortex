@@ -71,7 +71,9 @@ class ClaudeCodeAdapter(ClaudeStyleAdapter):
 
 
 # Set in hook processes by other TUIs that also execute ~/.claude/settings.json hooks.
-FOREIGN_HOST_ENV = ("CURSOR_VERSION", "DROID_PROJECT_DIR", "FACTORY_PROJECT_DIR", "GROK_HOOK_EVENT")
+# Copilot CLI also runs a trusted repo's .claude/settings.json hooks.
+FOREIGN_HOST_ENV = ("CURSOR_VERSION", "DROID_PROJECT_DIR", "FACTORY_PROJECT_DIR", "GROK_HOOK_EVENT",
+                    "COPILOT_CLI")
 
 
 def is_claude_code_payload(payload: Dict[str, Any]) -> bool:
@@ -97,7 +99,10 @@ class QoderAdapter(ClaudeStyleAdapter):
 class CodeBuddyAdapter(ClaudeStyleAdapter):
     name = "codebuddy"
     display_name = "CodeBuddy Code"
-    replaces_output = True  # "entirely replaces the original tool output"
+    # Its PostToolUse tool_response for Bash carries exit status and byte
+    # counts but no output (verified against 2.156.0): nothing to trim, so the
+    # event isn't registered (a Python start on every Bash call for nothing).
+    events = {k: v for k, v in ALL_EVENTS.items() if v != TOOL_OUTPUT}
 
 
 class DroidAdapter(ClaudeStyleAdapter):

@@ -55,8 +55,15 @@ class LettaAdapter(HookAdapter):
         if payload.get("is_command"):
             return None  # slash commands
         prompt = payload.get("prompt")
-        return HookEvent(kind=kind, name=name, payload=payload,
-                         session_id=str(payload.get("conversation_id") or payload.get("agent_id") or ""),
+        # conversation_id is literally "default" for every agent's default
+        # conversation: scope it to the agent, or all Letta sessions share state.
+        agent = str(payload.get("agent_id") or "")
+        conversation = str(payload.get("conversation_id") or "")
+        if not conversation or conversation == "default":
+            session = f"{agent}:default" if agent else ""
+        else:
+            session = conversation
+        return HookEvent(kind=kind, name=name, payload=payload, session_id=session,
                          prompt=prompt if isinstance(prompt, str) else "")
 
     def render_prompt(self, event: HookEvent, text: str) -> Response:

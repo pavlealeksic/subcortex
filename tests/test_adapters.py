@@ -204,10 +204,15 @@ class TestTaskEvidence(AdapterCase):
 
 
 class TestClaudeClones(AdapterCase):
-    def test_qoder_and_codebuddy_replace_with_a_string(self):
-        for tui in ("qoder", "codebuddy"):
-            out = self.run_hook(tui, "PostToolUse", self.sample(tui, "PostToolUse"))
-            self.assertIsInstance(out["hookSpecificOutput"]["updatedToolOutput"], str, tui)
+    def test_qoder_replaces_with_a_string(self):
+        out = self.run_hook("qoder", "PostToolUse", self.sample("qoder", "PostToolUse"))
+        self.assertIsInstance(out["hookSpecificOutput"]["updatedToolOutput"], str)
+
+    def test_codebuddy_does_not_register_tool_output(self):
+        # Its PostToolUse payload has no output to trim (CodeBuddy 2.156.0).
+        from subcortex import installers
+
+        self.assertNotIn("PostToolUse", installers.get_installer("codebuddy").hook_events())
 
     def test_droid_restores_by_previous_session_id(self):
         self.run_hook("droid", "PreCompact", self.sample("droid", "PreCompact"))

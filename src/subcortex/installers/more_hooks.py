@@ -127,7 +127,8 @@ class LettaInstaller(ClaudeStyleInstaller):
     display_name = "Letta Code"
     binaries = ("letta",)
     docs = "https://docs.letta.com/letta-code/hooks"
-    post_install = "restart letta (and don't edit hooks via /hooks in a session started before this install)"
+    post_install = ("restart letta (and don't edit hooks via /hooks in a session started before this "
+                    "install); hints apply to interactive sessions (letta -p skips the prompt hook)")
 
     def settings_path(self) -> Path:
         return Path.home() / ".letta" / "settings.json"

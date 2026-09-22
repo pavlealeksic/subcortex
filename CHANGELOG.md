@@ -45,6 +45,37 @@ Decisions you can trust, and a hook path that is safe under real, concurrent use
   during install, and never touch bytes outside subcortex's own block.
 - `doctor` flags integrations installed by an older subcortex.
 
+### Verified inside real TUIs
+Driven end to end, sandboxed, against mock model APIs (what each TUI sent to
+the model is asserted): Claude Code 2.1.278, Codex 0.155.1, Open Interpreter
+0.0.45, Gemini CLI 0.60.0, Qwen Code 0.24.3, Kimi Code 2.0.2, OpenCode
+1.18.31, Grok Build 1.0.40, Pi 0.87.0, Cline 3.0.62, Docker Agent 1.142.0,
+Mistral Vibe 2.25.5, Factory Droid 0.224.0, Copilot CLI 1.0.87, OpenHands
+1.16.0, Letta Code 0.32.15, CodeBuddy 2.156.0, Junie 26.9.21, Devin CLI
+3000.11.1, Cursor CLI 2026.09.18, Amp's plugin runtime, and the MCP servers in
+Crush 0.96.1, Goose 1.51.0 and Auggie 0.36.0. That found and fixed:
+- Codex / Open Interpreter: a failed command could be trimmed (the hook has
+  no exit code; it is now read from the session log). Open Interpreter
+  installs follow `INTERPRETER_HOME`.
+- Cline: compaction restore never arrived (`<user_input mode="act">` prompts
+  were dropped from snapshots).
+- Gemini CLI / Qwen Code: snapshots repeated subcortex's own hint (and on
+  Gemini compounded the previous restore).
+- Mistral Vibe: could never trim (no prompt event); the request now comes
+  from its message log.
+- Goose: after Goose rewrote its config, a reinstall wrote a duplicate key,
+  which made Goose reset the user's whole config.
+- Amp: a failed command (reported as `done` with a non-zero `exitCode`) could
+  be trimmed. CodeBuddy's post-tool hook carries no output, so it is no longer
+  registered. Letta's default conversations of different agents no longer
+  share state.
+- Installers follow each TUI's config-dir overrides (`CODEBUDDY_CONFIG_DIR`,
+  `QODER_CONFIG_DIR`, `JUNIE_HOME`, `XDG_CONFIG_HOME` for Devin), and MCP
+  entries run isolated (`python -I -m subcortex mcp`) like hooks.
+- The daemon could run an older subcortex from the backend venv; it now
+  always runs the installed code. Installers no longer execute a TUI to read
+  its version (Droid's `--version` refreshes logins and self-updates).
+
 ### Compatibility
 - Hook commands changed: run `subcortex install <tui>` (or `subcortex setup`)
   once; `subcortex doctor` lists what needs it. Old commands keep working

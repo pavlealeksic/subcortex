@@ -131,8 +131,18 @@ class QoderInstaller(ClaudeStyleInstaller):
     docs = "https://docs.qoder.com/cli/hooks"
     supports_mcp = True
 
+    def qoder_dir(self) -> Path:
+        # Qoder's own resolution: QODER_CONFIG_DIR, else (QODER_CLI_HOME |
+        # GEMINI_CLI_HOME | ~)/(QODER_CONFIG_DIR_NAME | .qoder).
+        explicit = os.environ.get("QODER_CONFIG_DIR", "").strip()
+        if explicit:
+            return Path(explicit).expanduser()
+        home = (os.environ.get("QODER_CLI_HOME", "").strip() or os.environ.get("GEMINI_CLI_HOME", "").strip())
+        name = os.environ.get("QODER_CONFIG_DIR_NAME", "").strip() or ".qoder"
+        return (Path(home).expanduser() if home else Path.home()) / name
+
     def settings_path(self) -> Path:
-        return Path.home() / ".qoder" / "settings.json"
+        return self.qoder_dir() / "settings.json"
 
     def mcp_target(self) -> Optional[Target]:
         return mcp_json_target(self.settings_path(), self.mcp_command())
@@ -145,11 +155,14 @@ class CodeBuddyInstaller(ClaudeStyleInstaller):
     docs = "https://www.codebuddy.ai/docs/cli/hooks"
     supports_mcp = True
 
+    def codebuddy_dir(self) -> Path:
+        return _home_dir("CODEBUDDY_CONFIG_DIR", Path.home() / ".codebuddy")
+
     def settings_path(self) -> Path:
-        return Path.home() / ".codebuddy" / "settings.json"
+        return self.codebuddy_dir() / "settings.json"
 
     def mcp_target(self) -> Optional[Target]:
-        return mcp_json_target(Path.home() / ".codebuddy" / ".mcp.json", self.mcp_command())
+        return mcp_json_target(self.codebuddy_dir() / ".mcp.json", self.mcp_command())
 
 
 class DroidInstaller(ClaudeStyleInstaller):
@@ -160,7 +173,8 @@ class DroidInstaller(ClaudeStyleInstaller):
     wrapper = None  # ~/.factory/hooks.json is keyed by event directly
     shell_tool = "Execute"
     supports_mcp = True
-    post_install = "hooks are snapshotted at startup: restart droid"
+    post_install = ("hooks are snapshotted at startup: restart droid. Hints reach interactive and "
+                    "SDK/stream sessions; one-shot `droid exec` skips the prompt hook")
 
     def factory_dir(self) -> Path:
         return _home_dir("FACTORY_HOME_OVERRIDE", Path.home()) / ".factory"
@@ -186,13 +200,16 @@ class JunieInstaller(ClaudeStyleInstaller):
     binaries = ("junie",)
     docs = "https://junie.jetbrains.com/docs/junie-cli-hooks.html"
     supports_mcp = True
-    post_install = "Junie hooks are an Early Access feature; enable EAP if they don't fire"
+    post_install = "hints apply to interactive Junie sessions (batch mode doesn't run hooks)"
+
+    def junie_dir(self) -> Path:
+        return _home_dir("JUNIE_HOME", Path.home() / ".junie")
 
     def settings_path(self) -> Path:
-        return Path.home() / ".junie" / "config.json"
+        return self.junie_dir() / "config.json"
 
     def mcp_target(self) -> Optional[Target]:
-        return mcp_json_target(Path.home() / ".junie" / "mcp" / "mcp.json", self.mcp_command())
+        return mcp_json_target(self.junie_dir() / "mcp" / "mcp.json", self.mcp_command())
 
 
 class DevinInstaller(ClaudeStyleInstaller):
@@ -202,8 +219,11 @@ class DevinInstaller(ClaudeStyleInstaller):
     docs = "https://docs.devin.ai/cli/extensibility/hooks"
     supports_mcp = True
 
+    def devin_dir(self) -> Path:
+        return _home_dir("XDG_CONFIG_HOME", Path.home() / ".config") / "devin"
+
     def settings_path(self) -> Path:
-        return Path.home() / ".config" / "devin" / "config.json"
+        return self.devin_dir() / "config.json"
 
     def mcp_target(self) -> Optional[Target]:
-        return mcp_json_target(Path.home() / ".config" / "devin" / "mcp_config.json", self.mcp_command())
+        return mcp_json_target(self.devin_dir() / "mcp_config.json", self.mcp_command())

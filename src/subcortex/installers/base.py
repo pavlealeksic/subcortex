@@ -724,11 +724,9 @@ class Installer:
         return hook_command(self.name, event)
 
     def mcp_command(self) -> List[str]:
-        """argv for the stdio MCP server (absolute, like hook commands)."""
-        for candidate in (Path(sys.executable).parent / "subcortex", shutil.which("subcortex")):
-            if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
-                return [str(candidate), "mcp"]
-        return [sys.executable, "-m", "subcortex", "mcp"]
+        """argv for the stdio MCP server: absolute and isolated like hook commands
+        (a TUI starts it from the user's project, with the user's PYTHONPATH)."""
+        return [sys.executable, "-I", "-m", "subcortex", "mcp"]
 
     def detected(self) -> Optional[str]:
         for binary in self.binaries:
@@ -844,6 +842,11 @@ class Installer:
         patterns = (
             # <python> [-I] -m subcortex.hook ... (current) / -m subcortex hook (0.1)
             r"""['"]?(/[^'"\s]+)['"]?\s+(?:-I\s+)?-m\s+subcortex(?:\.hook|\s+hook)\b""",
+            # MCP entries: <python> + args [..., "subcortex", "mcp"] — JSON (within one
+            # object), TOML (command = / args = lines), Goose YAML (cmd: / args:).
+            r'"command"\s*:\s*"(/[^"]+)"(?=[^{}]*"subcortex")',
+            r'command\s*=\s*"(/[^"]+)"\s*\n\s*args\s*=\s*\[[^\]]*"subcortex"',
+            r'cmd:\s*"?(/[^"\n]+?)"?\s*\n\s*args:\s*\[[^\]]*subcortex',
             # the console scripts: subcortex-hook (0.2), subcortex mcp
             r"""['"]?(/[^'"\s]*subcortex(?:-hook)?)['"]?\s""",
         )

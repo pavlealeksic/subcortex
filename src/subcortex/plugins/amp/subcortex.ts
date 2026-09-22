@@ -228,6 +228,8 @@ export default function (amp: PluginAPI) {
       if (!shell) return
       const text = outputText(event.output)
       if (text === null || text.length < LOCAL_MIN_OUTPUT_CHARS) return
+      const exit = (event.output as any)?.exitCode
+      if (typeof exit === "number" && exit !== 0) return // failures stay whole: Amp reports them as status "done"
       const res = await post(
         "/v1/tool-output",
         { output: text, tool: String(event.tool ?? "Bash"), input: { command: shell.command },

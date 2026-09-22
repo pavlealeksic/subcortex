@@ -289,6 +289,12 @@ class TestDoctorSupport(InstallerCase):
         settings.write_text(settings.read_text().replace(exes[0], "/gone/venv/bin/python"))
         self.assertEqual(installer.installed_executables(), ["/gone/venv/bin/python"])
 
+    def test_mcp_entries_are_isolated_and_doctor_finds_their_interpreter(self):
+        installer = installers.get_installer("crush")
+        self.install(installer)
+        self.assertEqual(installer.mcp_command()[1:], ["-I", "-m", "subcortex", "mcp"])
+        self.assertEqual(installer.installed_executables(), [sys.executable])
+
     def test_hook_commands_are_isolated_from_the_users_python_environment(self):
         cmd = base.hook_command("claude-code", "PostToolUse")
         self.assertEqual(shlex.split(cmd.replace(base.SHELL_GUARD, ""))[1:],
