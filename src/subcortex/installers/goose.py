@@ -72,7 +72,10 @@ def _unmarked_entry(text: str) -> Optional[Tuple[int, int]]:
             while end < len(lines) and (not lines[end].strip()
                                         or len(lines[end]) - len(lines[end].lstrip()) > indent):
                 end += 1
-            if any(re.match(r"^\s+(?:cmd|args):.*subcortex", l) for l in lines[i + 1:end]):
+            # Ours if it runs subcortex: in `cmd`, an inline `args: [...]`, or a
+            # block list item (serde_yaml writes `args:` then `- subcortex`).
+            if any(re.match(r"^\s+(?:cmd|args):.*\bsubcortex\b", l)
+                   or re.match(r"""^\s+-\s+['"]?subcortex['"]?\s*$""", l) for l in lines[i + 1:end]):
                 return i, end
     return None
 

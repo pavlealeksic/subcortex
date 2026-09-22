@@ -117,11 +117,13 @@ class TestGooseRewritesItsConfig(InstallerCase):
         installer = installers.get_installer("goose")
         self.install(installer)
         config = installer.targets()[0].path
-        text = config.read_text()
-        cmd = next(line for line in text.splitlines() if "cmd:" in line)
+        # What Goose (serde_yaml) writes back: no comments, block lists, keys
+        # reordered — and an interpreter path that says nothing about subcortex.
         rewritten = ("GOOSE_PROVIDER: openai\nextensions:\n  myext:\n    enabled: true\n    type: builtin\n"
-                     f"  subcortex:\n    enabled: true\n{cmd}\n    type: stdio\nGOOSE_MODEL: gpt-5\n")
-        config.write_text(rewritten)  # what Goose writes back: same entry, no markers
+                     "  subcortex:\n    args:\n    - -I\n    - -m\n    - subcortex\n    - mcp\n"
+                     "    bundled: false\n    cmd: /usr/bin/python3\n    enabled: true\n    type: stdio\n"
+                     "GOOSE_MODEL: gpt-5\n")
+        config.write_text(rewritten)
         self.assertTrue(installer.status()["installed"])
         again = self.install(installer)
         self.assertTrue(again.ok, again.messages)
