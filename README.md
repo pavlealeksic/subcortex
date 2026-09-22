@@ -86,10 +86,13 @@ curl -fsSL https://raw.githubusercontent.com/pavlealeksic/subcortex/main/install
 That installs the CLI into its own environment (uv, pipx or a private venv)
 and starts **`subcortex setup`**, an interactive walk-through:
 
-1. **Backend** — Laya (local; installs `laya-mlx`/`laya` into a dedicated
-   environment and downloads the model) or Jev (hosted; your API key is kept in
-   the environment or in a mode-600 file).
-2. **Behaviors** — prompt hints, output trimming, compaction snapshots.
+1. **Backend** — Jev (hosted, most accurate: pick TypeSafe, OpenRouter or
+   another endpoint, paste your key — it is checked with one real decision
+   before it is saved, and a wrong one offers retry / keep / use Laya / skip)
+   or Laya (local; installs `laya-mlx`/`laya` into a dedicated environment and
+   downloads the model).
+2. **Behaviors** — prompt hints, output trimming (with Laya only after an
+   explicit OK), compaction snapshots; optionally the advanced settings.
 3. **TUIs** — a checklist of every supported TUI, with the ones found on this
    machine preselected.
 4. **Review** — each file that will change, with its diff on request; every
@@ -197,8 +200,9 @@ run this inside real work, so every one of these is enforced by tests:
 
 ```sh
 subcortex doctor                 # check config, backend, daemon, installed hooks
-subcortex config                 # show every setting (config edit: interactive)
-subcortex config set thresholds.min_output_chars 8000
+subcortex config                 # settings editor in a terminal: every option, validated,
+                                 #   with defaults, env overrides and the Jev key; listing otherwise
+subcortex config set thresholds.min_output_chars 8000   # or get / unset / show, for scripts
 subcortex service install        # start the daemon at login (launchd / systemd --user)
 subcortex serve                  # start the background daemon (127.0.0.1:7707)
 subcortex stats                  # hints, trims (tokens saved), restores and jev cost, per TUI

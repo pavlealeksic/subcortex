@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.3.1
+
+### Onboarding
+- `subcortex setup` explains the choice honestly (Jev: most accurate, hosted,
+  needs a key; Laya: private and free, no trimming by default) and preselects
+  Jev when a key is already available.
+- Jev: pick TypeSafe, OpenRouter or another endpoint, get pointed to
+  https://console.typesafe.ai/keys, paste the key hidden. It is checked with
+  one real decision *before* it is saved; a wrong key offers retry, keep
+  anyway, use Laya instead, or skip. Keys are only ever shown masked. A pinned
+  model (`jev-1.13.0`, the calibrated one) is preselected, and an optional
+  quality check runs `subcortex eval`.
+- With Laya, output trimming is off by default and needs an explicit OK that
+  states the measured risk.
+- Optional advanced settings (hook time limit, output size, compaction memory,
+  autostart), and a summary of where subcortex is active and how to see it
+  working.
+
+### Settings
+- `subcortex config` in a terminal is now a settings editor: every option by
+  section with its current value and help, on/off settings toggle in place,
+  menus for choices, validated numbers, "calibrated or custom" thresholds,
+  a reset to default by choosing it again, settings forced by `SUBCORTEX_*`
+  variables marked as such, and the Jev key (replace — checked first — or
+  remove). `config set` validates through the same rules.
+
 ## 0.3.0
 
 Decisions you can trust, and a hook path that is safe under real, concurrent use.

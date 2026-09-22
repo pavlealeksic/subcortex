@@ -24,9 +24,24 @@ from .ui import UI, Cancelled
 STEPS = 5
 FEATURES = [
     ("prompt_hint", "Prompt hints", "tell the main model when a request looks simple"),
-    ("trim_output", "Output trimming", "cut large, disposable shell output to head + tail"),
-    ("compaction_snapshot", "Compaction snapshots", "keep the last messages across context compaction"),
+    ("trim_output", "Output trimming", "cut large routine shell output the request doesn't need"),
+    ("compaction_snapshot", "Compaction snapshots", "carry the last messages across context compaction"),
 ]
+TYPESAFE_KEYS_URL = "https://console.typesafe.ai/keys"
+# (value, label, hint, jev settings or None for a custom endpoint)
+JEV_PROVIDERS = [
+    ("typesafe", "TypeSafe", f"api.typesafe.ai · keys: {TYPESAFE_KEYS_URL}",
+     {"base_url": "https://api.typesafe.ai", "endpoint_path": "/v1/systemone", "api_key_env": "TYPESAFE_API_KEY"}),
+    ("openrouter", "OpenRouter", "openrouter.ai · uses your OpenRouter key",
+     {"base_url": "https://openrouter.ai/api", "endpoint_path": "/v1/systemone", "api_key_env": "OPENROUTER_API_KEY",
+      "model": "jev-latest"}),
+    ("custom", "Another endpoint", "any server that speaks the Jev API", None),
+]
+JEV_MODELS = [
+    ("jev-1.13.0", "jev-1.13.0", "pinned · subcortex's thresholds were calibrated on it"),
+    ("jev-latest", "jev-latest", "follows new releases · re-check with `subcortex eval` when it moves"),
+]
+LAYA_TRIM_THRESHOLD = 0.9  # the Laya output rule's primary threshold, set explicitly to opt in
 MODELS = [
     ("multilingual", "multilingual", "default · many languages"),
     ("english", "english", "English only · smallest"),
@@ -46,6 +61,8 @@ def capabilities(name: str) -> str:
         return "on-demand tools"
     adapter = get_adapter(name)
     kinds = set(adapter.events.values()) if adapter else set()
+    if adapter is not None and not adapter.delivers_hints:
+        kinds.discard(PROMPT)  # the prompt hook only records the request (Grok discards its output)
     parts = [label for kind, label in ((PROMPT, "hint"), (TOOL_OUTPUT, "trim"), (PRE_COMPACT, "compaction"))
              if kind in kinds]
     return " · ".join(parts) or "—"
@@ -91,6 +108,7 @@ class Wizard:
         self.args = args
         self.yes = bool(getattr(args, "yes", False))
         self.next_steps: List[str] = []
+        self.installed: List[str] = []
 
     # -- helpers ---------------------------------------------------------------------------
 
@@ -105,8 +123,9 @@ class Wizard:
     def run(self) -> int:
         ui = self.ui
         ui.title(f"subcortex {__version__} setup")
-        ui.dim("A small local decision model that saves your coding TUIs tokens. "
-               "Nothing is written until you confirm it.")
+        ui.dim("Fast decisions for your coding agents: a hint when a request is simple, routine shell")
+        ui.dim("output trimmed before the model reads it, and recent conversation carried across")
+        ui.dim("context compaction. Nothing is written until you confirm it.")
         try:
             self.step_backend()
             self.step_features()
@@ -128,9 +147,13 @@ class Wizard:
         cfg = load_config()
         backend = getattr(self.args, "backend", None)
         if not backend:
-            options = [("laya", "Laya — local model", f"private, offline, free · {provision.laya_package()}"),
-                       ("jev", "Jev — hosted API", "nothing to install locally · needs an API key")]
-            backend = self.choose("Which decision backend?", options, 0 if cfg["backend"] == "laya" else 1)
+            options = [("jev", "Jev — hosted by TypeSafe",
+                        "most accurate · ~250 ms a decision · $0.042 per million tokens · needs an API key"),
+                       ("laya", "Laya — runs on this machine",
+                        f"private · offline · free · more cautious: no output trimming · {provision.laya_package()}")]
+            has_key = bool(read_secret(cfg["jev"].get("api_key_env") or "TYPESAFE_API_KEY"))
+            default = 0 if has_key or cfg["backend"] == "jev" else 1
+            backend = self.choose("Which model should make these decisions?", options, default)
         save_config({"backend": backend})
         if backend == "laya":
             self.setup_laya()
@@ -139,6 +162,8 @@ class Wizard:
 
     def setup_laya(self) -> None:
         ui = self.ui
+        ui.dim("Laya gives prompt hints and carries context across compaction. It doesn't trim")
+        ui.dim("output unless you opt in: its judgments cut output a request needed in our tests.")
         cfg = load_config()
         model = getattr(self.args, "model", None)
         if not model:
@@ -218,81 +243,206 @@ class Wizard:
 
     def setup_jev(self) -> None:
         ui = self.ui
-        jev = load_config()["jev"]
-        ui.dim("Sent to the Jev API per decision: your latest request, the tool call, and a "
-               "~1.5 KB head+tail excerpt of large outputs, with anything that looks like a "
-               "secret masked. Billed per input token ($0.042 per million); `subcortex stats` "
-               "shows the running total.")
-        if not self.yes and self.ui.confirm(f"Use the default endpoint ({jev['base_url']}{jev['endpoint_path']})?", True) is False:
-            from .backends import jev as jev_backend
-
-            def valid_url(value: str) -> Optional[str]:
-                try:
-                    jev_backend._check_url(jev_backend._join_url(value, "/"))
-                except Exception as exc:
-                    return str(exc)
-                return None
-
-            base = ui.ask("Base URL", jev["base_url"], validate=valid_url)
-            path = ui.ask("Endpoint path", jev["endpoint_path"])
-            model = ui.ask("Model", jev["model"])
-            save_config({"jev": {"base_url": base, "endpoint_path": path, "model": model}})
+        provider = self._jev_endpoint()
         env_name = load_config()["jev"]["api_key_env"]
         import os
 
         if os.environ.get(env_name, "").strip():
-            ui.ok(f"using ${env_name} from your environment")
-            if self.confirm("Also store it privately so a daemon started at login can use it?", False):
-                path = save_secret(env_name, os.environ[env_name].strip())
-                ui.ok(f"stored in {path} (readable only by you)")
+            key = os.environ[env_name].strip()
+            ui.ok(f"using ${env_name} from your environment ({_masked(key)})")
+            if self._verify_jev(key) and self.confirm(
+                    "Also store it privately, so a daemon started at login can use it?", False):
+                ui.ok(f"stored in {save_secret(env_name, key)} (only you can read it)")
         elif read_secret(env_name):
-            ui.ok(f"using the key stored in {secrets_path()}")
+            ui.ok(f"using your stored key ({_masked(read_secret(env_name) or '')})")
             if not self.yes and ui.confirm("Replace it?", False):
-                self._ask_key(env_name)
+                self._enter_jev_key(env_name, provider)
+            else:
+                self._verify_jev(read_secret(env_name) or "")
         elif self.yes:
-            self.next_steps.append(f"provide the jev API key: export {env_name}=… or run subcortex setup")
+            self.next_steps.append(f"add your Jev API key: subcortex setup (or export {env_name}=…)")
             return
         else:
-            self._ask_key(env_name)
-        if read_secret(env_name) and self.confirm("Check the key with one test decision?", True):
-            self.test_jev()
+            self._enter_jev_key(env_name, provider)
+        if read_secret(env_name):
+            ui.dim("Each decision sends your latest request, the tool call and a ~1.5 KB excerpt of large")
+            ui.dim("outputs (anything that looks like a secret is masked first). `subcortex stats` shows the cost.")
+            if not self.yes and ui.confirm("Check the decision quality on your setup now? "
+                                           "(64 labeled examples · ~25 s · under $0.01)", False):
+                self._run_eval()
 
-    def _ask_key(self, env_name: str) -> None:
-        key = self.ui.ask(f"{env_name} (input hidden; stored with mode 600)", secret=True)
-        if key:
-            path = save_secret(env_name, key)
-            self.ui.ok(f"stored in {path} (readable only by you)")
+    def _jev_endpoint(self) -> str:
+        """Which Jev endpoint (and model); returns the provider value."""
+        ui = self.ui
+        jev = load_config()["jev"]
+        current = next((i for i, p in enumerate(JEV_PROVIDERS)
+                        if p[3] and p[3]["base_url"].rstrip("/") == str(jev.get("base_url", "")).rstrip("/")), 0)
+        if self.yes:
+            return JEV_PROVIDERS[current][0]
+        provider = ui.choose("Which Jev endpoint?", [p[:3] for p in JEV_PROVIDERS], current)
+        settings = next(p[3] for p in JEV_PROVIDERS if p[0] == provider)
+        if settings is None:
+            from .backends import jev as jev_backend
+
+            def valid_url(value: str) -> Optional[str]:
+                try:
+                    jev_backend._check_url(jev_backend._join_url(value, "/v1/systemone"))
+                except Exception as exc:
+                    return str(exc)
+                return None
+
+            base = ui.ask("Base URL (as in its docs)", jev["base_url"], validate=valid_url)
+            model = ui.ask("Model", jev["model"])
+            env_name = ui.ask("Environment variable for its key", jev["api_key_env"],
+                              validate=lambda v: None if v.replace("_", "").isalnum() else "letters, digits and _ only")
+            save_config({"jev": {"base_url": base, "endpoint_path": "/v1/systemone", "model": model,
+                                 "api_key_env": env_name}})
+            return provider
+        save_config({"jev": dict(settings)})
+        if provider == "typesafe":
+            # A model chosen earlier stays preselected; otherwise the pinned one:
+            # a moving alias can change probability scales under the calibrated rules.
+            chosen = _saved_setting("jev", "model")
+            index = next((i for i, m in enumerate(JEV_MODELS) if m[0] == chosen), 0)
+            save_config({"jev": {"model": ui.choose("Which Jev model?", JEV_MODELS, index)}})
+        return provider
+
+    def _enter_jev_key(self, env_name: str, provider: str) -> None:
+        """Ask for the key, check it with a real decision, store it only if it works
+        (or if the user insists)."""
+        ui = self.ui
+        if provider == "typesafe":
+            ui.info(f"Create a key at {TYPESAFE_KEYS_URL}")
+        while True:
+            key = ui.ask("API key (paste it; input is hidden)", secret=True, validate=_key_problem)
+            if not key:
+                self.next_steps.append(f"add your Jev API key: subcortex setup (or export {env_name}=…)")
+                return
+            if self._verify_jev(key, report_failure=False):
+                ui.ok(f"stored in {save_secret(env_name, key)} (only you can read it)")
+                return
+            choice = ui.choose("What now?", [
+                ("retry", "Enter it again", ""),
+                ("keep", "Keep it anyway", "e.g. offline right now · `subcortex doctor` checks it later"),
+                ("laya", "Use Laya instead", "runs on this machine, no key"),
+                ("skip", "Skip for now", "hooks pass everything through until a key is added"),
+            ], 0)
+            if choice == "retry":
+                continue
+            if choice == "keep":
+                ui.ok(f"stored in {save_secret(env_name, key)} (only you can read it)")
+                self.next_steps.append("check the Jev key: subcortex doctor")
+            elif choice == "laya":
+                save_config({"backend": "laya"})
+                self.setup_laya()
+            else:
+                self.next_steps.append(f"add your Jev API key: subcortex setup (or export {env_name}=…)")
+            return
+
+    def _verify_jev(self, key: str, report_failure: bool = True) -> bool:
+        """One real decision with ``key`` (not stored yet); True if it worked."""
+        ok, message = self.check_jev(key)
+        if ok:
+            self.ui.ok(message)
         else:
-            self.next_steps.append(f"provide the jev API key: export {env_name}=… or run subcortex setup")
+            self.ui.error(message)
+            if report_failure:
+                self.next_steps.append("check the Jev key/endpoint: subcortex setup")
+        return ok
 
-    def test_jev(self) -> None:
+    def check_jev(self, key: str) -> Tuple[bool, str]:
+        import os
+
         from .backends import get_backend
 
-        backend = get_backend(load_config(), "jev")
+        cfg = load_config()
+        env_name = cfg["jev"]["api_key_env"]
+        backend = get_backend(cfg, "jev")
+        previous = os.environ.get(env_name)
+        os.environ[env_name] = key  # this process only, for the one check
         try:
-            with self.ui.spinner("asking jev"):
+            with self.ui.spinner("checking the key with one decision"):
                 started = time.perf_counter()
                 result = backend.predict(
                     {"prompt": "what is 2+2?"},
                     {"arithmetic": {"type": "noul",
                                     "instructions": "The request in `prompt` asks for an arithmetic result."}})
             model = result.get("model") if isinstance(result.get("model"), str) else "jev"
-            self.ui.ok(f"key works — {model} answered in {(time.perf_counter() - started) * 1000:.0f} ms")
+            return True, f"key works — {model} answered in {(time.perf_counter() - started) * 1000:.0f} ms"
         except Exception as exc:
-            self.ui.error(f"test decision failed: {exc}")
-            self.next_steps.append("check the jev key/endpoint: subcortex setup")
+            return False, str(exc).replace("jev request failed: ", "")
+        finally:
+            if previous is None:
+                os.environ.pop(env_name, None)
+            else:
+                os.environ[env_name] = previous
+
+    def _run_eval(self) -> None:
+        from . import cli
+
+        out = io.StringIO()
+        with self.ui.spinner("running the labeled examples"), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
+            code = cli.main(["eval", "--backend", "jev"])
+        for line in out.getvalue().splitlines():
+            self.ui.dim(line)
+        (self.ui.ok if code == 0 else self.ui.warn)(
+            "no hint on complex work, no needed output trimmed" if code == 0
+            else "see above; thresholds can be adjusted with subcortex config")
 
     # -- 2. behaviors ------------------------------------------------------------------------
 
     def step_features(self) -> None:
-        self.ui.step(2, STEPS, "Behaviors")
-        current = {k for k, v in (load_config().get("features") or {}).items() if v}
-        chosen = set(current if self.yes else self.ui.checklist("What should subcortex do?", FEATURES, current))
+        ui = self.ui
+        ui.step(2, STEPS, "Behaviors")
+        cfg = load_config()
+        laya = cfg.get("backend") == "laya"
+        opted_in = cfg["thresholds"].get("output_needed_threshold") is not None
+        current = {k for k, v in (cfg.get("features") or {}).items() if v}
+        if laya and not opted_in:
+            current.discard("trim_output")
+        options = [(key, label, "off by default with Laya · needs your OK" if key == "trim_output" and laya
+                    else hint) for key, label, hint in FEATURES]
+        chosen = set(current if self.yes else ui.checklist("What should subcortex do?", options, current))
+        if laya and "trim_output" in chosen and not opted_in:
+            ui.warn("With Laya, trimming can cut output a request needs (it did on 2 of 6 held-out examples).")
+            if ui.confirm("Enable output trimming with Laya anyway?", False):
+                save_config({"thresholds": {"output_needed_threshold": LAYA_TRIM_THRESHOLD}})
+            else:
+                chosen.discard("trim_output")
         save_config({"features": {key: key in chosen for key, _, _ in FEATURES}})
         if chosen:
-            self.ui.ok(", ".join(label.lower() for key, label, _ in FEATURES if key in chosen))
+            ui.ok(", ".join(label.lower() for key, label, _ in FEATURES if key in chosen))
         else:
-            self.ui.warn("all behaviors are off — hooks will pass everything through")
+            ui.warn("all behaviors are off — hooks will pass everything through")
+        if not self.yes and ui.confirm("Adjust advanced settings? (time limits, sizes, autostart)", False):
+            self.advanced()
+
+    def advanced(self) -> None:
+        ui = self.ui
+        cfg = load_config()
+        hooks, thresholds = cfg["hooks"], cfg["thresholds"]
+
+        def number(low: float, high: float, integer: bool = False):
+            def check(value: str) -> Optional[str]:
+                try:
+                    parsed = int(value) if integer else float(value)
+                except ValueError:
+                    return "a whole number" if integer else "a number"
+                return None if low <= parsed <= high else f"between {low:g} and {high:g}"
+            return check
+
+        budget = ui.ask("Time limit for one hook, in seconds", f"{hooks['budget_s']:g}", validate=number(0.5, 30))
+        min_chars = ui.ask("Only judge tool outputs longer than (characters)", str(thresholds["min_output_chars"]),
+                           validate=number(1000, 1_000_000, integer=True))
+        messages = ui.ask("Messages carried across compaction", str(hooks["snapshot_messages"]),
+                          validate=number(1, 50, integer=True))
+        autostart = ui.confirm("Start the daemon automatically when a hook finds it down?",
+                               bool(hooks["autostart_daemon"]))
+        save_config({"hooks": {"budget_s": float(budget), "snapshot_messages": int(messages),
+                               "autostart_daemon": autostart},
+                     "thresholds": {"min_output_chars": int(min_chars)}})
+        ui.ok("advanced settings saved (all of them: subcortex config)")
 
     # -- 3. TUIs --------------------------------------------------------------------------------
 
@@ -377,6 +527,8 @@ class Wizard:
                     result = installer.install(check_version=not getattr(self.args, "ignore_version", False))
             if result.ok:
                 ui.ok(f"{label}: {'removed' if action == 'uninstall' else 'installed'}")
+                if action != "uninstall":
+                    self.installed.append(label)
                 for backup in result.backups:
                     ui.dim(f"  backup: {backup}")
                 for message in result.messages:
@@ -436,10 +588,45 @@ class Wizard:
 
     def summary(self) -> None:
         ui = self.ui
+        cfg = load_config()
         ui.title("Done")
+        if self.installed:
+            ui.ok(f"subcortex is active in {', '.join(self.installed)} "
+                  f"(decisions by {'Jev' if cfg.get('backend') == 'jev' else 'Laya'})")
         for step in self.next_steps:
             ui.info(f"→ {step}")
-        ui.dim("Check health any time: subcortex doctor · change choices: subcortex setup")
+        ui.dim("See what it did:        subcortex stats")
+        ui.dim("Check its decisions:    subcortex eval")
+        ui.dim("Health check:           subcortex doctor")
+        ui.dim("Change anything:        subcortex setup   ·   every setting: subcortex config")
+
+
+def _saved_setting(section: str, key: str) -> Any:
+    """A value the user saved in config.json (not a built-in default), or None."""
+    from .config import config_path
+
+    try:
+        data = json.loads(config_path().read_text())
+    except (OSError, ValueError):
+        return None
+    value = data.get(section) if isinstance(data, dict) else None
+    return value.get(key) if isinstance(value, dict) else None
+
+
+def _masked(key: str) -> str:
+    key = key.strip()
+    return f"{key[:8]}…{key[-4:]}" if len(key) > 16 else "…" + key[-2:]
+
+
+def _key_problem(value: str) -> Optional[str]:
+    """Empty is allowed (skip); anything else must look like a key."""
+    if not value:
+        return None
+    if any(c.isspace() for c in value) or not value.isascii() or not value.isprintable():
+        return "that doesn't look like a key (spaces or control characters) — paste it again"
+    if len(value) < 16:
+        return "that's too short for an API key — paste the whole key"
+    return None
 
 
 def _resolve(requested: Sequence[str], rows: Sequence[Dict[str, Any]]) -> List[str]:

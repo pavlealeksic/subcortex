@@ -615,7 +615,11 @@ def _set_dotted(key: str, value: Any) -> None:
 def cmd_config(args: argparse.Namespace) -> int:
     from .config import config_path, secrets_path, unset_config
 
-    action = args.action or "show"
+    from .ui import UI
+
+    action = args.action
+    if action is None:  # a terminal gets the editor; scripts and pipes get the listing
+        action = "edit" if UI().interactive else "show"
     cfg = load_config()
     flat = _flatten(cfg)
     if action == "show":
@@ -639,8 +643,11 @@ def cmd_config(args: argparse.Namespace) -> int:
         if args.value is None:
             print("usage: subcortex config set <key> <value>", file=sys.stderr)
             return 2
+        from . import settings
+
         try:
-            value = _coerce(args.key, args.value)
+            value = (settings.parse(args.key, args.value) if args.key in settings.BY_KEY
+                     else _coerce(args.key, args.value))
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 2
@@ -650,29 +657,14 @@ def cmd_config(args: argparse.Namespace) -> int:
     if action == "unset":
         print(f"{args.key} reverted to default" if unset_config(args.key) else f"{args.key} was not set")
         return 0
-    # edit: interactive
-    from .ui import UI, Cancelled
-
+    # edit: the interactive settings editor
     ui = UI()
     if not ui.interactive:
-        print("config edit needs a terminal; use: subcortex config set <key> <value>", file=sys.stderr)
+        print("the settings editor needs a terminal; use: subcortex config set <key> <value>", file=sys.stderr)
         return 2
-    try:
-        while True:
-            flat = _flatten(load_config())
-            options = [(k, k, json.dumps(v)) for k, v in sorted(flat.items())] + [(None, "done", "")]
-            key = ui.choose("Change which setting?", options, len(options) - 1)
-            if key is None:
-                return 0
-            while True:
-                raw = ui.ask(key, json.dumps(flat[key]).strip('"'))
-                try:
-                    _set_dotted(key, _coerce(key, raw))
-                    break
-                except ValueError as exc:
-                    ui.warn(str(exc))
-    except Cancelled:
-        return 130
+    from . import settings
+
+    return settings.edit(ui)
 
 
 def cmd_mcp(args: argparse.Namespace) -> int:
@@ -771,7 +763,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_service.add_argument("action", choices=["install", "uninstall", "status"])
     p_service.set_defaults(func=cmd_service)
 
-    p_config = sub.add_parser("config", help="show or change settings")
+    p_config = sub.add_parser("config", help="change settings (interactive in a terminal), or show/get/set/unset")
     p_config.add_argument("action", nargs="?", choices=["show", "get", "set", "unset", "edit"])
     p_config.add_argument("key", nargs="?")
     p_config.add_argument("value", nargs="?")
