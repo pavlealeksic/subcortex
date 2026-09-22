@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "subcortex"
-version = "0.3.0"
+version = "0.3.1"
 description = "Local decision layer for coding-agent TUIs: a warm daemon answering System-1 questions in milliseconds"
 readme = "README.md"
 requires-python = ">=3.11"
